@@ -1,0 +1,326 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { box-sizing: border-box; }
+html { background: #020617; }
+body { margin: 0; min-width: 320px; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+button, input, select { font: inherit; }
+button { cursor: pointer; }
+
+.timetable-print-header {
+  display: grid;
+  grid-template-columns: 64px 1fr 190px;
+  align-items: center;
+  gap: 12px;
+  min-height: 78px;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.timetable-logo-slot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 54px;
+  height: 54px;
+}
+
+.timetable-logo {
+  width: 54px;
+  height: 54px;
+  object-fit: contain;
+}
+
+.timetable-logo-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 54px;
+  height: 54px;
+  border: 1px solid #94a3b8;
+  border-radius: 10px;
+  font-size: 22px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.timetable-school-heading {
+  min-width: 0;
+  text-align: center;
+}
+
+.timetable-school-name {
+  overflow: hidden;
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timetable-document-title {
+  margin-top: 3px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+}
+
+.timetable-meta {
+  margin-top: 3px;
+  font-size: 10px;
+  color: #475569;
+}
+
+.timetable-entity-heading {
+  min-width: 0;
+  text-align: right;
+}
+
+.timetable-entity-type {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.timetable-entity-name {
+  margin-top: 2px;
+  overflow: hidden;
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+}
+
+.timetable-lesson-card {
+  min-height: 52px;
+}
+
+.timetable-division-compact {
+  min-height: 0;
+  padding: 4px 5px !important;
+}
+
+.timetable-division-subjects,
+.timetable-division-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timetable-division-compact-label {
+  margin-top: 1px;
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #64748b;
+}
+
+.timetable-double-badge {
+  display: inline-block;
+  margin-top: 2px;
+}
+
+.timetable-division-card {
+  min-height: 42px;
+  padding: 4px 6px !important;
+}
+
+.timetable-division-card > div:first-child {
+  gap: 4px;
+}
+
+.timetable-division-label {
+  margin-top: 1px;
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: #64748b;
+}
+
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 7mm;
+  }
+
+  html,
+  body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+  }
+
+  body {
+    min-width: 0;
+  }
+
+  .timetable-generator-shell > :not(.timetable-preview-panel):not(.timetable-print-all) {
+    display: none !important;
+  }
+
+  .timetable-generator-shell.print-all-mode .timetable-preview-panel > :not(.timetable-print-all) {
+    display: none !important;
+  }
+
+  .timetable-generator-shell.print-all-mode .timetable-print-all {
+    display: block !important;
+  }
+
+  .timetable-print-all {
+    display: none;
+  }
+
+  .timetable-print-page-break {
+    break-after: page;
+    page-break-after: always;
+  }
+
+  .timetable-print-page {
+    width: 100%;
+    break-inside: avoid;
+  }
+
+  .timetable-preview-panel {
+    display: block !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: #ffffff !important;
+    box-shadow: none !important;
+  }
+
+  .timetable-print-header {
+    min-height: 66px;
+    margin-bottom: 7px;
+    padding: 6px 10px;
+    border: 1px solid #94a3b8;
+    border-radius: 6px;
+  }
+
+  .timetable-logo-slot,
+  .timetable-logo {
+    width: 46px;
+    height: 46px;
+  }
+
+  .timetable-logo-placeholder {
+    width: 46px;
+    height: 46px;
+    border-radius: 6px;
+    font-size: 18px;
+  }
+
+  .timetable-school-name {
+    font-size: 17px;
+  }
+
+  .timetable-document-title {
+    font-size: 9px;
+  }
+
+  .timetable-meta,
+  .timetable-entity-type {
+    font-size: 8px;
+  }
+
+  .timetable-entity-name {
+    font-size: 15px;
+  }
+
+  .timetable-grid {
+    width: 100% !important;
+    min-width: 0 !important;
+    table-layout: fixed;
+    font-size: 8px !important;
+  }
+
+  .timetable-grid th,
+  .timetable-grid td {
+    padding: 3px !important;
+    line-height: 1.15;
+  }
+
+  .timetable-grid thead th {
+    height: 27px;
+  }
+
+  .timetable-grid tbody th {
+    width: 58px;
+    font-size: 8px;
+  }
+
+  .timetable-grid tbody td {
+    height: 20mm;
+    vertical-align: middle;
+  }
+
+  .timetable-lesson-card {
+    min-height: 0;
+    padding: 3px 4px !important;
+    border-radius: 3px !important;
+  }
+
+  .timetable-division-compact {
+    min-height: 0;
+    padding: 2px 3px !important;
+  }
+
+  .timetable-division-subjects {
+    font-size: 8px !important;
+    line-height: 1.1 !important;
+  }
+
+  .timetable-division-detail {
+    font-size: 6px !important;
+    line-height: 1.1 !important;
+  }
+
+  .timetable-division-compact-label {
+    font-size: 5px !important;
+    line-height: 1.05 !important;
+  }
+
+  .timetable-double-badge {
+    font-size: 6px !important;
+    line-height: 1 !important;
+  }
+
+  .timetable-division-card {
+    min-height: 0;
+    padding: 2px 4px !important;
+  }
+
+  .timetable-division-label {
+    font-size: 6px;
+  }
+
+  .timetable-grid .text-\[10px\] {
+    font-size: 7px !important;
+  }
+
+  .timetable-grid .text-\[9px\] {
+    font-size: 6px !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .timetable-print-header {
+    grid-template-columns: 48px 1fr;
+  }
+
+  .timetable-entity-heading {
+    grid-column: 1 / -1;
+    text-align: left;
+  }
+
+  .timetable-school-name {
+    font-size: 16px;
+  }
+}
