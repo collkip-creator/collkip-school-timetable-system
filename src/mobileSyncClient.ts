@@ -93,6 +93,3 @@ export const mobileSyncApi = {
   sync: (body: Record<string, unknown>) =>
     request('/api/mobile/sync', body),
 };
-
-What changed
-The important change is that the Android side no longer uses Capacito
