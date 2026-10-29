@@ -6,6 +6,8 @@ on:
     branches: [main]
     paths:
       - 'src/**'
+      - 'mobile/**'
+      - 'vite.mobile.config.ts'
       - 'package.json'
       - 'package-lock.json'
       - 'capacitor.config.ts'
@@ -55,8 +57,8 @@ jobs:
             async signOut() {},
           };
           EOF
-      - name: Build web assets
-        run: npm run build
+      - name: Build dedicated teacher-only mobile assets
+        run: npm run build:mobile
       - name: Generate Android platform if missing
         shell: bash
         run: |

@@ -10,7 +10,8 @@
     "tauri": "tauri",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",
-    "android:sync": "npm run build && cap sync android",
+    "build:mobile": "vite build --config vite.mobile.config.ts",
+    "android:sync": "npm run build:mobile && cap sync android",
     "android:open": "cap open android"
   },
   "dependencies": {
