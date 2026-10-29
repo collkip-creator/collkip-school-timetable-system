@@ -31,6 +31,30 @@ jobs:
           java-version: '21'
       - name: Install dependencies
         run: npm install
+      - name: Provide AppDeploy client shim for standalone APK build
+        shell: bash
+        run: |
+          mkdir -p node_modules/@appdeploy/client
+          cat > node_modules/@appdeploy/client/package.json <<'EOF'
+          {"name":"@appdeploy/client","version":"0.0.0-ci","type":"module"}
+          EOF
+          cat > node_modules/@appdeploy/client/index.js <<'EOF'
+          const API_BASE = 'https://collkip-school-timetable-system-6h732l.v2.appdeploy.ai';
+          const request = async (method, path, data) => {
+            const response = await fetch(`${API_BASE}${path}`, { method, headers: { 'Content-Type': 'application/json' }, body: data === undefined ? undefined : JSON.stringify(data) });
+            const text = await response.text();
+            let parsed;
+            try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
+            if (!response.ok) throw new Error(parsed?.error || parsed?.message || `Request failed with status ${response.status}`);
+            return { data: parsed };
+          };
+          export const api = { get: path => request('GET', path), post: (path, data) => request('POST', path, data) };
+          export const auth = {
+            async getUser() { return null; },
+            async signIn() { throw new Error('Super Admin sign-in is only available in the hosted AppDeploy portal.'); },
+            async signOut() {},
+          };
+          EOF
       - name: Build web assets
         run: npm run build
       - name: Generate Android platform if missing
