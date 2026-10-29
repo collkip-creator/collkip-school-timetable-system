@@ -1,51 +1,36 @@
 [
   {
-    "name": "Preserve the existing local school workspace",
+    "name": "Open teacher mobile sync and keep pairing available",
     "sanity": true,
     "viewport": "desktop",
-    "covers": ["local school data persistence", "data-access boundary", "persistence after reload"],
-    "description": "Verifies the Phase 1B storage abstraction preserves the existing school workspace across a reload.",
-    "steps": ["Open the existing school workspace", "Refresh the application", "Open the same school data section again"],
-    "expected": "The previously stored school data remains available after refresh and the application does not reset the workspace."
+    "covers": ["Teacher Mobile Sync workspace", "QR pairing", "teacher-specific timetable publishing", "device revocation"],
+    "description": "Verifies the existing desktop workflow for pairing teachers and publishing their read-only timetable remains available after notification delivery is removed.",
+    "steps": ["Open Teacher Mobile Sync", "Select an active teacher", "Review the pairing QR workflow and paired device controls"],
+    "expected": "The pairing and device management workflow remains usable and does not require notification sign-in."
   },
   {
-    "name": "Filter Weekly Requirements by multiple data-hygiene dimensions",
-    "viewport": "desktop",
-    "covers": ["Weekly Requirements class filter", "Weekly Requirements subject filter", "Weekly Requirements double-lesson filter", "Weekly Requirements active/inactive filter", "combinable filters", "clear filters"],
-    "description": "Verifies requirement review filters can be combined to isolate a precise subset of records and can be cleared.",
-    "steps": ["Open Weekly Requirements with multiple requirements present", "Select a class, a subject, With doubles, and Active status together", "Confirm only matching requirements remain visible", "Change Status to All statuses and confirm inactive records can be reviewed", "Use Clear filters"],
-    "expected": "Class, subject, double-lesson, and status filters work together; inactive requirements can be reviewed; Clear filters restores the default Active view and clears search text."
-  },
-  {
-    "name": "Configure and enforce generic teacher consecutive-single limits",
-    "viewport": "desktop",
-    "covers": ["teacher consecutive single lesson constraint", "maximum consecutive single lessons", "same-class consecutive single lesson limit", "different-class consecutive singles", "generic constraint scope"],
-    "description": "Verifies the consecutive-single rule distinguishes overall teacher runs from consecutive singles assigned to the same class.",
-    "steps": ["Open Constraints and add a Hard Teacher consecutive single lessons rule for a selected teacher", "Set maximum consecutive single lessons to 3 and maximum consecutive singles with the same class to 1", "Generate a timetable with enough demand to require consecutive singles", "Review the generated timetable and validation findings"],
-    "expected": "Up to three consecutive single lessons can be scheduled for the selected teacher when they serve different classes, while consecutive single lessons for the same class are limited to one."
-  },
-  {
-    "name": "Configure generic allowed lesson periods for subject placement",
-    "viewport": "desktop",
-    "covers": ["allowed lesson numbers constraint", "subject placement hard constraint", "selected subject scope", "allowed period enforcement"],
-    "description": "Verifies a subject placement rule can restrict lessons to selected lesson numbers without hard-coded subject or period names.",
-    "steps": ["Open Constraints and add a Hard Subject placement rule scoped to a selected subject", "Enter allowed lesson numbers such as 4, 7, and 10", "Generate the timetable", "Review the subject's scheduled lesson numbers"],
-    "expected": "Every scheduled lesson for the targeted subject uses one of the configured allowed lesson numbers, while other subjects remain governed by their own rules."
-  },
-  {
-    "name": "Generate and independently validate division, doubles, and repair coverage",
-    "viewport": "desktop",
-    "covers": ["division scheduling", "configured doubles stay within shared segments when capacity allows", "cross-boundary double lessons", "shared first period and independent second period", "configured double lesson counts", "teacher and room conflict prevention", "actual bell-schedule intervals", "independent hard-constraint validation", "no-division regression", "bounded Quick Generate", "conflict-directed repair", "no duplicate repaired placements", "accurate unscheduled lesson counts across different days", "weekly count uses day plus period ID", "independent validator matches timetable grid coverage"],
-    "description": "Verifies the generic scheduler handles divisions, doubles, resources, ordinary requirements, and conflict-directed repair without duplicating displaced lessons or falsely reporting a lesson as unscheduled.",
-    "steps": ["Configure valid requirements and, where needed, a division with unequal weekly lesson counts and one configured double", "Open Generate Timetable and run Quick Generate", "Review scheduled periods, doubles, shared intervals, resource conflicts, validation findings, and any unscheduled requirement counts", "If the bounded search uses repair, inspect the affected class timetable and compare its visible lesson periods with the requirement's scheduled count"],
-    "expected": "The scheduler respects configured demand, linked shared periods, double continuity, teachers, rooms, actual bell-schedule intervals, and independent validation; a repaired lesson exists only once in the final placement set, and weekly coverage counts each day-and-period occurrence separately even when a bell-schedule period ID repeats on another day; the generator, independent validator, and manual editor agree with the visible timetable grid; configured doubles are allocated within shared or independent segments whenever their capacities allow, and cross-boundary doubles are used only when required."
-  },
-  {
-    "name": "Manually repair a timetable with rule-aware drag and drop",
+    "name": "Save local reminder preferences in the teacher portal",
     "viewport": "mobile",
-    "covers": ["drag scheduled lesson within grid", "drag scheduled lesson to unscheduled tray", "drag unscheduled lesson into grid", "click-to-select movement alternative", "hard-constraint rejection of invalid move", "manual timetable candidate persistence", "fully solved timetable saved as last valid", "class teacher and room timetable presentation", "combined class compact display on teacher timetable", "combined class placement metadata and synchronized movement", "numbered timetable pagination for classes teachers and rooms", "jump directly to a timetable page", "print current timetable page", "print all timetables in a category", "print-only pagination controls hidden", "one A4 landscape page per printed entity", "next and previous timetable navigation", "branded one-page print header", "compact division display without wider grid"],
-    "description": "Verifies users can manually move scheduled and unscheduled lessons while hard rules remain enforced and a fully solved result is persisted as valid.",
-    "steps": ["Generate a timetable that has at least one scheduled lesson and at least one unscheduled lesson", "Drag a scheduled lesson to another grid cell and confirm the move is accepted only when validation passes", "Drag a scheduled lesson into the Unscheduled lessons tray", "Drag an unscheduled lesson into a valid grid location, or click it and click a destination cell", "Attempt a conflicting move and confirm it is rejected", "Resolve all remaining unscheduled lessons and confirm the result status becomes Complete", "Refresh the page and load the last valid timetable", "Open the timetable preview, switch between Classes, Teachers, and Rooms, and confirm each category shows numbered pages from 1 through the last entity", "Click a non-first page number and confirm the corresponding class, teacher, or room timetable is shown", "Use Print this page and confirm the selected timetable is printed as one A4 landscape page without pagination controls", "Use Print all Classes, Print all Teachers, and Print all Rooms from their respective views and confirm each entity is printed on its own A4 landscape page", "Use Next and Previous to move through the available entities", "Confirm the selected entity name is prominent and the print preview shows the school logo area, centered school name, entity identity, and a single landscape timetable sheet", "Review a class containing a division and confirm the division information remains inside the existing timetable cells without creating additional timetable columns"],
-    "expected": "Valid manual moves are saved as the working candidate; combined-class placements retain their group relationship after refresh, appear as one synchronized event on the teacher timetable with participating classes compacted into the same tile, and move to a new day/period or back to the tray as one group; unscheduled lessons can be placed into valid cells; conflicting moves are rejected with a reason; once all lessons are placed with zero hard violations the timetable is saved as the last valid timetable and remains loadable after refresh. The presentation supports separate class, teacher, and room views with sequential navigation, clearly identifies the current entity, prints a branded one-page landscape layout, and keeps division details compact within the same grid width." 
+    "covers": ["teacher-controlled notification preferences", "local preferences persistence", "web portal native-only explanation"],
+    "description": "Verifies teachers can change reminder preferences without signing into AppDeploy or registering for push delivery.",
+    "steps": ["Open the teacher timetable portal", "Change the before-lesson reminder to 15 minutes", "Save preferences", "Reload the portal and review the selected value"],
+    "expected": "The preference remains stored on the device and the portal explains that reliable background reminders require the Android APK."
+  },
+  {
+    "name": "Use the cached timetable while offline",
+    "viewport": "mobile",
+    "covers": ["offline cached timetable", "read-only teacher timetable", "no notification server dependency"],
+    "description": "Verifies a previously paired teacher can continue to view the locally cached timetable without internet access.",
+    "setup": ["Pair a teacher phone and allow its timetable snapshot to be cached"],
+    "steps": ["Disconnect the device from the internet", "Open the teacher timetable portal", "Review the current week's lessons and reminder preferences"],
+    "expected": "The saved timetable and local reminder preferences remain visible; no notification API request is required."
+  },
+  {
+    "name": "Reject notification activation in a browser-only portal",
+    "viewport": "mobile",
+    "covers": ["native Android notification requirement", "permission guardrail", "no browser push fallback"],
+    "description": "Verifies the hosted web portal does not pretend to provide reliable native background notifications.",
+    "steps": ["Open notification settings in the hosted teacher portal", "Select Enable notifications"],
+    "expected": "The portal explains that native local notifications require the Collkip Android APK and does not initiate AppDeploy push subscription."
   }
 ]

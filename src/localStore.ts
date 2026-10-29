@@ -59,4 +59,6 @@ export const localStoreKeys = {
   timetableCandidate: 'collkip-timetable-candidate-v1',
   timetableValid: 'collkip-timetable-valid-v1',
   legacyFoundation: 'collkip-phase1-state-v1',
+  license: 'collkip-license-v1',
+  deviceId: 'collkip-device-id-v1',
 } as const;

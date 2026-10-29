@@ -1,0 +1,159 @@
+import { useEffect, useMemo, useState } from 'react';
+import QRCode from 'qrcode';
+import { Smartphone, RefreshCcw, ShieldCheck, Wifi, WifiOff, X } from 'lucide-react';
+import { localStore, localStoreKeys } from './localStore';
+import { mobileSyncApi } from './mobileSyncClient';
+import { getNativeNotificationStatus, requestLocalNotificationPermission, scheduleTeacherReminders, showLocalTestNotification, showTimetableChangedNotification } from './nativeNotifications';
+import type { ScheduleResult } from './scheduler';
+
+type Teacher = { id: string; code: string; name: string; shortName: string; email: string; phone: string; department: string; status: 'Active' | 'Inactive'; notes: string };
+type Subject = { id: string; code: string; name: string; shortName: string; status: 'Active' | 'Inactive' };
+type SchoolClass = { id: string; code: string; name: string; level: string; stream: string; status: 'Active' | 'Inactive' };
+type Room = { id: string; code: string; name: string; status: 'Active' | 'Inactive' };
+type Period = { id: string; order: number; name: string; start: string; end: string; type: string; status: 'Active' | 'Inactive' };
+type AppData = { teachers: Teacher[]; subjects: Subject[]; classes: SchoolClass[]; rooms: Room[]; periods: Period[] };
+type SchoolProfile = { name: string; code: string; academicYear: string; term: string; schoolDays: number };
+type License = { licenseId: string; status: string };
+type SnapshotLesson = { day: number; periodOrder: number; periodName: string; start: string; end: string; subject: string; subjectCode: string; className: string; classCode: string; room: string; roomCode: string; lessonBlockType: 'Single' | 'Double'; doublePart?: 1 | 2 };
+type Snapshot = { version: string; teacherId: string; teacherCode: string; teacherName: string; teacherEmail: string; schoolName: string; schoolCode: string; academicYear: string; term: string; schoolDays: number; timezone: string; lessons: SnapshotLesson[] };
+type Pairing = { token: string; expiresAt: string; teacherName: string; teacherCode: string; lessonCount: number; qrDataUrl: string };
+type MobileDevice = { id: string; teacherId: string; teacherName: string; deviceName: string; status: string; pairedAt: string; lastSeenAt: string; snapshotVersion: string };
+
+const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const API_BASE = 'https://collkip-school-timetable-system-6h732l.v2.appdeploy.ai';
+const pairUrl = (token: string) => `${API_BASE}/?teacherPair=${encodeURIComponent(token)}`;
+
+export function TeacherMobileSync({ data, profile, license, deviceId }: { data: AppData; profile: SchoolProfile; license: License; deviceId: string }) {
+  const [teacherId, setTeacherId] = useState(data.teachers.find(t => t.status === 'Active')?.id || '');
+  const [pairing, setPairing] = useState<Pairing | null>(null);
+  const [devices, setDevices] = useState<MobileDevice[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [qrOpen, setQrOpen] = useState(false);
+  const valid = localStore.get<ScheduleResult | null>(localStoreKeys.timetableValid, null);
+  const activeTeachers = data.teachers.filter(t => t.status === 'Active');
+  const selectedTeacher = activeTeachers.find(t => t.id === teacherId);
+
+  const snapshotForTeacher = (teacher: Teacher): Snapshot => {
+    const placements = Array.isArray(valid?.placements) ? valid.placements.filter(p => p.teacherId === teacher.id) : [];
+    const lessons = placements.flatMap(p => p.periodIds.map((periodId, index) => {
+      const period = data.periods.find(x => x.id === periodId);
+      const subject = data.subjects.find(x => x.id === p.subjectId);
+      const schoolClass = data.classes.find(x => x.id === p.classId);
+      const room = data.rooms.find(x => x.id === p.roomId);
+      return period ? {
+        day: p.day,
+        periodOrder: Number(period.order),
+        periodName: period.name,
+        start: period.start,
+        end: period.end,
+        subject: subject?.name || 'Unknown subject',
+        subjectCode: subject?.code || '',
+        className: schoolClass?.name || 'Unknown class',
+        classCode: schoolClass?.code || '',
+        room: room?.name || 'No room',
+        roomCode: room?.code || '',
+        lessonBlockType: p.lessonBlockType || 'Single',
+        doublePart: p.lessonBlockType === 'Double' ? ((p.doublePart || (index + 1)) as 1 | 2) : undefined,
+      } : null;
+    }).filter(Boolean) as SnapshotLesson[]);
+    lessons.sort((a, b) => a.day - b.day || a.periodOrder - b.periodOrder || a.subject.localeCompare(b.subject));
+    return { version: new Date().toISOString(), teacherId: teacher.id, teacherCode: teacher.code, teacherName: teacher.name, teacherEmail: teacher.email || '', schoolName: profile.name, schoolCode: profile.code, academicYear: profile.academicYear, term: profile.term, schoolDays: Math.max(1, Math.min(7, Number(profile.schoolDays || 5))), timezone: profile.timezone || 'Africa/Nairobi', lessons };
+  };
+
+  const loadDevices = async () => {
+    if (!license.licenseId) return;
+    try { const response = await mobileSyncApi.listDevices({ licenseId: license.licenseId, deviceId }); setDevices((response.devices || []) as MobileDevice[]); }
+    catch (err) { setNotice(err instanceof Error ? err.message : 'Could not load paired mobile devices.'); }
+  };
+
+  useEffect(() => { void loadDevices(); }, [license.licenseId, deviceId]);
+
+  const generatePairing = async () => {
+    if (!selectedTeacher) return setNotice('Select an active teacher first.');
+    if (!license.licenseId || !['Active', 'Grace Period', 'Trial'].includes(license.status)) return setNotice('Activate a valid Collkip license before pairing teacher devices.');
+    if (!valid || valid.status !== 'Complete' || valid.violations.length > 0) return setNotice('A fully validated timetable is required before pairing a teacher mobile device.');
+    setBusy(true); setNotice('');
+    try {
+      const snapshot = snapshotForTeacher(selectedTeacher);
+      if (!snapshot.lessons.length) { setNotice(`${selectedTeacher.name} has no scheduled lessons in the last validated timetable.`); return; }
+      const response = await mobileSyncApi.createPairing({ licenseId: license.licenseId, deviceId, schoolCode: profile.code, teacherId: selectedTeacher.id, teacherCode: selectedTeacher.code, teacherName: selectedTeacher.name, snapshot });
+      const token = String(response.token || '');
+      const qrDataUrl = await QRCode.toDataURL(pairUrl(token), { width: 280, margin: 2, errorCorrectionLevel: 'M' });
+      setPairing({ token, expiresAt: String(response.expiresAt), teacherName: selectedTeacher.name, teacherCode: selectedTeacher.code, lessonCount: snapshot.lessons.length, qrDataUrl });
+      setQrOpen(true); await loadDevices();
+    } catch (err) { setNotice(err instanceof Error ? err.message : 'Teacher pairing could not be created.'); }
+    finally { setBusy(false); }
+  };
+
+  const pushTeacher = async (teacher: Teacher) => {
+    if (!license.licenseId || !valid || valid.status !== 'Complete' || valid.violations.length) return setNotice('A fully validated timetable is required before synchronizing.');
+    setBusy(true); setNotice('');
+    try { const snapshot = snapshotForTeacher(teacher); const response = await mobileSyncApi.pushSnapshot({ licenseId: license.licenseId, deviceId, teacherId: teacher.id, snapshot }); setNotice(`${teacher.name}: ${Number(response.updatedDevices || 0)} mobile device(s) updated.`); await loadDevices(); }
+    catch (err) { setNotice(err instanceof Error ? err.message : 'Teacher timetable sync failed.'); }
+    finally { setBusy(false); }
+  };
+
+  const revoke = async (id: string) => {
+    if (!window.confirm('Revoke this teacher mobile device? It will stop receiving timetable updates.')) return;
+    setBusy(true);
+    try { await mobileSyncApi.revokeDevice({ licenseId: license.licenseId, deviceId, mobileDeviceId: id }); setNotice('Teacher mobile device revoked.'); await loadDevices(); }
+    catch (err) { setNotice(err instanceof Error ? err.message : 'Device revocation failed.'); }
+    finally { setBusy(false); }
+  };
+
+  const selectedCount = selectedTeacher ? snapshotForTeacher(selectedTeacher).lessons.length : 0;
+  return <div className="space-y-6"><div><div className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-400">Phase 5 · Teacher synchronization</div><h1 className="mt-2 text-3xl font-bold">Teacher Mobile Sync</h1><p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">Pair each teacher's phone with a read-only, teacher-specific timetable. The desktop timetable remains the source of truth. Pairing links are short-lived and single-use.</p></div>{notice && <div role="status" className="flex items-center gap-3 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-sm text-amber-200"><Smartphone size={17}/><span>{notice}</span><button className="ml-auto" onClick={()=>setNotice('')} aria-label="Dismiss"><X size={15}/></button></div>}<div className="grid gap-4 md:grid-cols-3"><div className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><div className="text-xs uppercase tracking-wider text-slate-500">Validated timetable</div><div className="mt-2 text-2xl font-bold">{valid?.status === 'Complete' && !valid.violations.length ? 'Ready' : 'Not ready'}</div><div className="mt-1 text-xs text-slate-500">Only a fully validated timetable is published to teachers.</div></div><div className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><div className="text-xs uppercase tracking-wider text-slate-500">Paired phones</div><div className="mt-2 text-2xl font-bold">{devices.filter(d => d.status === 'Active').length}</div><div className="mt-1 text-xs text-slate-500">Active teacher mobile devices.</div></div><div className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><div className="text-xs uppercase tracking-wider text-slate-500">Sync model</div><div className="mt-2 flex items-center gap-2 font-semibold"><Wifi size={17} className="text-emerald-300"/> Desktop → mobile</div><div className="mt-1 text-xs text-slate-500">Mobile access is read-only in this phase.</div></div></div><div className="grid gap-5 lg:grid-cols-[1fr_360px]"><section className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-lg font-semibold">Create teacher pairing</h2><p className="mt-1 text-sm text-slate-500">Select a teacher, then show the QR code on the school computer for the teacher to scan.</p></div><button disabled={busy || !selectedTeacher} onClick={generatePairing} className="rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-slate-950 disabled:opacity-50">{busy ? 'Working…' : 'Generate pairing QR'}</button></div><label className="mt-5 block space-y-2"><span className="text-sm font-medium text-slate-300">Teacher</span><select value={teacherId} onChange={e=>setTeacherId(e.target.value)} className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-3 text-sm"><option value="">Select teacher</option>{activeTeachers.map(t=><option key={t.id} value={t.id}>{t.name} · {t.code}</option>)}</select></label>{selectedTeacher && <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950 p-4"><div className="font-semibold">{selectedTeacher.name}</div><div className="mt-1 text-xs text-slate-500">{selectedTeacher.code} · {selectedTeacher.department || 'No department'}</div><div className="mt-3 text-sm text-slate-300">{selectedCount} scheduled lesson periods in the last validated timetable.</div></div>}<div className="mt-5 rounded-xl border border-emerald-500/10 bg-emerald-500/5 p-4 text-xs leading-5 text-slate-400"><b className="text-emerald-200">How it works:</b> the QR contains a short-lived pairing link. The phone claims it once, receives only that teacher's timetable, and stores the latest snapshot locally for offline viewing.</div></section><section className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><div className="flex items-center justify-between"><div><h2 className="font-semibold">Pairing status</h2><p className="mt-1 text-xs text-slate-500">One-time QR links expire automatically.</p></div><button onClick={()=>void loadDevices()} className="rounded-lg border border-slate-700 p-2" title="Refresh devices"><RefreshCcw size={16}/></button></div>{pairing ? <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4"><div className="text-sm font-semibold text-emerald-200">Pairing ready for {pairing.teacherName}</div><div className="mt-3 grid place-items-center rounded-xl bg-white p-3"><img src={pairing.qrDataUrl} alt="Teacher mobile pairing QR code" className="h-56 w-56"/></div><div className="mt-3 rounded-lg border border-slate-700 bg-slate-950 p-3 text-center font-mono text-sm break-all">{pairing.token}</div><div className="mt-2 text-center text-xs text-slate-500">Expires {new Date(pairing.expiresAt).toLocaleTimeString()}</div><button onClick={()=>setQrOpen(true)} className="mt-3 w-full rounded-lg border border-slate-700 px-3 py-2 text-sm">Open larger QR</button></div> : <div className="mt-5 rounded-xl border border-dashed border-slate-700 p-6 text-center text-sm text-slate-500">Generate a pairing to display its QR code here.</div>}</section></div><section className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><div><h2 className="text-lg font-semibold">Paired teacher phones</h2><p className="mt-1 text-sm text-slate-500">Revoke lost or replaced phones. Revocation affects only the mobile device, not school timetable data.</p></div><div className="mt-4 overflow-x-auto"><table className="w-full min-w-[720px] text-sm"><thead><tr className="border-b border-slate-800 text-left text-xs uppercase tracking-wider text-slate-500"><th className="p-3">Teacher</th><th className="p-3">Device</th><th className="p-3">Status</th><th className="p-3">Last seen</th><th className="p-3">Actions</th></tr></thead><tbody>{devices.map(device=><tr key={device.id} className="border-b border-slate-800/80"><td className="p-3 font-medium">{device.teacherName}</td><td className="p-3 text-slate-400">{device.deviceName || 'Teacher phone'}</td><td className="p-3"><span className={device.status === 'Active' ? 'text-emerald-300' : 'text-rose-300'}>{device.status}</span></td><td className="p-3 text-slate-500">{device.lastSeenAt ? new Date(device.lastSeenAt).toLocaleString() : '—'}</td><td className="p-3">{device.status === 'Active' && <><button disabled={busy} onClick={()=>{ const teacher = activeTeachers.find(t=>t.id===device.teacherId); if (teacher) void pushTeacher(teacher); else setNotice('The teacher record for this mobile device no longer exists.'); }} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs disabled:opacity-50">Sync now</button><button disabled={busy} onClick={()=>void revoke(device.id)} className="ml-2 rounded-lg border border-red-500/20 px-3 py-1.5 text-xs text-red-300 disabled:opacity-50">Revoke</button></>}</td></tr>)}{devices.length===0&&<tr><td colSpan={5} className="p-8 text-center text-slate-500">No teacher phones are paired yet.</td></tr>}</tbody></table></div></section>{qrOpen && pairing && <div className="fixed inset-0 z-[80] grid place-items-center bg-black/80 p-4"><div className="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-950 p-5"><div className="flex items-center justify-between"><div><div className="text-xs uppercase tracking-wider text-emerald-400">Scan to pair</div><h2 className="mt-1 text-xl font-bold">{pairing.teacherName}</h2></div><button onClick={()=>setQrOpen(false)} className="rounded-lg border border-slate-700 p-2"><X size={17}/></button></div><div className="mt-5 grid place-items-center rounded-2xl bg-white p-4"><img src={pairing.qrDataUrl} alt="Teacher mobile pairing QR code" className="h-72 w-72"/></div><div className="mt-4 text-center text-sm text-slate-300">Scan this code with the teacher's phone. The link expires automatically and can only be claimed once.</div></div></div>}</div>;
+}
+
+const MOBILE_CACHE_KEY = 'collkip-teacher-mobile-cache-v1';
+const MOBILE_CREDENTIAL_KEY = 'collkip-teacher-mobile-credential-v1';
+type Credential = { accessToken: string; teacherName: string; teacherCode: string; teacherEmail: string; schoolName: string; schoolCode: string };
+type NotificationSettings = { morningSummary: { enabled: boolean; time: string }; beforeLesson: { enabled: boolean; minutes: number }; lessonEnding: { enabled: boolean; minutes: number }; tomorrowSummary: boolean; timetableChanges: boolean };
+const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = { morningSummary: { enabled: true, time: '06:00' }, beforeLesson: { enabled: true, minutes: 10 }, lessonEnding: { enabled: false, minutes: 5 }, tomorrowSummary: false, timetableChanges: true };
+const MOBILE_NOTIFICATION_SETTINGS_KEY = 'collkip-teacher-notification-settings-v1';
+
+export function TeacherMobilePortal({ pairingToken }: { pairingToken?: string }) {
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(() => { try { return JSON.parse(localStorage.getItem(MOBILE_CACHE_KEY) || 'null') as Snapshot | null; } catch { return null; } });
+  const [credential, setCredential] = useState<Credential | null>(() => { try { return JSON.parse(localStorage.getItem(MOBILE_CREDENTIAL_KEY) || 'null') as Credential | null; } catch { return null; } });
+  const [status, setStatus] = useState<'connecting' | 'online' | 'offline' | 'revoked'>(pairingToken ? 'connecting' : 'offline');
+  const [notice, setNotice] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>(() => { try { return { ...DEFAULT_NOTIFICATION_SETTINGS, ...JSON.parse(localStorage.getItem(MOBILE_NOTIFICATION_SETTINGS_KEY) || '{}') }; } catch { return DEFAULT_NOTIFICATION_SETTINGS; } });
+  const [notificationEnvironment, setNotificationEnvironment] = useState<string>('Checking notification support…');
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const claim = async (token: string) => { setBusy(true); setStatus('connecting'); try { const response = await mobileSyncApi.claimPairing({ token, deviceName: typeof navigator !== 'undefined' ? navigator.userAgent.slice(0, 80) : 'Teacher phone' }); const nextCredential: Credential = { accessToken: String(response.accessToken), teacherName: String(response.teacher?.name || ''), teacherCode: String(response.teacher?.code || ''), teacherEmail: String(response.teacher?.email || ''), schoolName: String(response.school?.name || ''), schoolCode: String(response.school?.code || '') }; const nextSnapshot = response.snapshot as Snapshot; localStorage.setItem(MOBILE_CREDENTIAL_KEY, JSON.stringify(nextCredential)); localStorage.setItem(MOBILE_CACHE_KEY, JSON.stringify(nextSnapshot)); setCredential(nextCredential); setSnapshot(nextSnapshot); setStatus('online'); setNotice('Phone paired successfully.'); history.replaceState({}, '', window.location.pathname); } catch (err) { setStatus(snapshot ? 'offline' : 'revoked'); setNotice(err instanceof Error ? err.message : 'This pairing link is invalid or expired.'); } finally { setBusy(false); } };
+  const sync = async () => { if (!credential?.accessToken) return; setBusy(true); try { const response = await mobileSyncApi.sync({ accessToken: credential.accessToken, cursor: snapshot?.version || '' }); if (response.snapshot) { const next = response.snapshot as Snapshot; const previousSignature = snapshot ? JSON.stringify(snapshot.lessons) : ''; const nextSignature = JSON.stringify(next.lessons); localStorage.setItem(MOBILE_CACHE_KEY, JSON.stringify(next)); setSnapshot(next); if (previousSignature && previousSignature !== nextSignature && notificationSettings.timetableChanges && notificationsEnabled) await showTimetableChangedNotification(); if (notificationsEnabled) await scheduleTeacherReminders(next, notificationSettings); } setStatus('online'); setNotice('Timetable is up to date.'); } catch (err) { setStatus(snapshot ? 'offline' : 'revoked'); setNotice(err instanceof Error ? err.message : 'Sync unavailable. Showing the last saved timetable.'); } finally { setBusy(false); } };
+  const enableNotifications = async () => {
+    if (!snapshot) return;
+    setBusy(true); setNotice('');
+    try {
+      const result = await requestLocalNotificationPermission();
+      if (!result.granted) throw new Error(result.message || 'Notification permission was not granted.');
+      await scheduleTeacherReminders(snapshot, notificationSettings);
+      localStorage.setItem(MOBILE_NOTIFICATION_SETTINGS_KEY, JSON.stringify(notificationSettings));
+      setNotificationsEnabled(true); setNotificationEnvironment('Native Android local notifications enabled'); setNotice('Local reminders are scheduled on this phone. They do not need AppDeploy notification delivery or internet access.');
+    } catch (err) { setNotice(err instanceof Error ? err.message : 'Could not enable local notifications. Install the Collkip Android APK to use native reminders.'); }
+    finally { setBusy(false); }
+  };
+  const saveNotificationSettings = async () => {
+    localStorage.setItem(MOBILE_NOTIFICATION_SETTINGS_KEY, JSON.stringify(notificationSettings));
+    if (!notificationsEnabled || !snapshot) { setNotice('Preferences saved on this device. Enable local notifications on the Android app to schedule reminders.'); return; }
+    setBusy(true);
+    try { await scheduleTeacherReminders(snapshot, notificationSettings); setNotice('Preferences saved and local reminders rescheduled on this phone.'); }
+    catch (err) { setNotice(err instanceof Error ? err.message : 'Could not reschedule local reminders.'); }
+    finally { setBusy(false); }
+  };
+  const sendTestNotification = async () => {
+    setBusy(true); setNotice('');
+    try { await showLocalTestNotification(); setNotice('Local test notification scheduled on this phone.'); }
+    catch (err) { setNotice(err instanceof Error ? err.message : 'Native local notifications are available in the Android APK.'); }
+    finally { setBusy(false); }
+  };
+  useEffect(() => {
+    if (pairingToken) void claim(pairingToken); else if (credential) void sync();
+    void (async () => { try { const result = await getNativeNotificationStatus(); setNotificationEnvironment(result.message); setNotificationsEnabled(result.granted); } catch { setNotificationEnvironment('Install the Collkip Android APK for native local notifications'); setNotificationsEnabled(false); } })();
+  }, []);
+  const days = useMemo(() => Array.from({ length: snapshot?.schoolDays || 5 }, (_, i) => i), [snapshot?.schoolDays]);
+  return <div className="min-h-screen bg-slate-950 text-slate-100"><main className="mx-auto max-w-lg px-4 py-5 pb-10"><header className="rounded-3xl border border-slate-800 bg-slate-900 p-5"><div className="flex items-center gap-3"><div className="grid h-12 w-12 place-items-center rounded-2xl bg-emerald-500 text-slate-950"><Smartphone size={24}/></div><div><div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-400">COLLKIP</div><h1 className="text-xl font-bold">Teacher Timetable</h1></div></div>{snapshot&&<div className="mt-5"><div className="text-lg font-semibold">{snapshot.teacherName}</div><div className="text-sm text-slate-400">{snapshot.teacherCode} · {snapshot.schoolName}</div></div>}<div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs"><span className="flex items-center gap-2">{status === 'online' ? <Wifi size={15} className="text-emerald-300"/> : <WifiOff size={15} className="text-amber-300"/>}<span>{status === 'online' ? 'Synced online' : status === 'connecting' ? 'Pairing…' : status === 'revoked' ? 'Access revoked' : 'Offline · cached timetable'}</span></span><button disabled={busy || !credential || status === 'revoked'} onClick={()=>void sync()} className="rounded-lg border border-slate-700 px-3 py-2 disabled:opacity-50">{busy?'…':'Sync'}</button></div></header>{notice&&<div role="status" className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-sm text-amber-200">{notice}</div>}{snapshot && status !== 'revoked' && <section className="mt-5 rounded-2xl border border-slate-800 bg-slate-900 p-4"><div className="flex items-start justify-between gap-3"><div><h2 className="font-semibold">Notifications</h2><p className="mt-1 text-xs leading-5 text-slate-500">Choose which timetable reminders you want. Scheduled alerts use the school's bell times and timezone.</p></div><div className="text-right text-[11px] text-slate-500">{notificationEnvironment}</div></div><div className="mt-4 rounded-xl border border-slate-800 bg-slate-950 p-3"><div className="flex items-center justify-between gap-3"><div><div className="text-sm font-medium">Native local notifications</div><div className="mt-1 text-xs text-slate-500">{notificationsEnabled ? 'Scheduled on this phone' : 'No server delivery; Android APK required'}</div></div><button type="button" disabled={busy || notificationsEnabled} onClick={()=>void enableNotifications()} className="rounded-lg bg-emerald-500 px-3 py-2 text-xs font-semibold text-slate-950 disabled:opacity-50">{notificationsEnabled ? 'Enabled' : 'Enable notifications'}</button></div></div><div className="mt-3 space-y-3"><label className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950 p-3"><span><span className="block text-sm font-medium">Morning summary</span><span className="block text-xs text-slate-500">Daily timetable summary</span></span><input type="checkbox" checked={notificationSettings.morningSummary.enabled} onChange={e=>setNotificationSettings(s=>({...s,morningSummary:{...s.morningSummary,enabled:e.target.checked}}))}/></label>{notificationSettings.morningSummary.enabled&&<label className="block rounded-xl border border-slate-800 bg-slate-950 p-3"><span className="text-xs text-slate-500">Morning time</span><input type="time" value={notificationSettings.morningSummary.time} onChange={e=>setNotificationSettings(s=>({...s,morningSummary:{...s.morningSummary,time:e.target.value}}))} className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"/></label>}<label className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950 p-3"><span><span className="block text-sm font-medium">Before lesson</span><span className="block text-xs text-slate-500">Reminder before each lesson starts</span></span><input type="checkbox" checked={notificationSettings.beforeLesson.enabled} onChange={e=>setNotificationSettings(s=>({...s,beforeLesson:{...s.beforeLesson,enabled:e.target.checked}}))}/></label>{notificationSettings.beforeLesson.enabled&&<label className="block rounded-xl border border-slate-800 bg-slate-950 p-3"><span className="text-xs text-slate-500">Minutes before</span><select value={notificationSettings.beforeLesson.minutes} onChange={e=>setNotificationSettings(s=>({...s,beforeLesson:{...s.beforeLesson,minutes:Number(e.target.value)}}))} className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm">{[5,10,15,20,30].map(n=><option key={n} value={n}>{n} minutes</option>)}</select></label>}<label className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950 p-3"><span><span className="block text-sm font-medium">Lesson ending</span><span className="block text-xs text-slate-500">Reminder before the lesson ends</span></span><input type="checkbox" checked={notificationSettings.lessonEnding.enabled} onChange={e=>setNotificationSettings(s=>({...s,lessonEnding:{...s.lessonEnding,enabled:e.target.checked}}))}/></label>{notificationSettings.lessonEnding.enabled&&<label className="block rounded-xl border border-slate-800 bg-slate-950 p-3"><span className="text-xs text-slate-500">Minutes before end</span><select value={notificationSettings.lessonEnding.minutes} onChange={e=>setNotificationSettings(s=>({...s,lessonEnding:{...s.lessonEnding,minutes:Number(e.target.value)}}))} className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm">{[5,10,15].map(n=><option key={n} value={n}>{n} minutes</option>)}</select></label>}<label className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950 p-3"><span><span className="block text-sm font-medium">Tomorrow summary</span><span className="block text-xs text-slate-500">Preview tomorrow's timetable</span></span><input type="checkbox" checked={notificationSettings.tomorrowSummary} onChange={e=>setNotificationSettings(s=>({...s,tomorrowSummary:e.target.checked}))}/></label><label className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950 p-3"><span><span className="block text-sm font-medium">Timetable changes</span><span className="block text-xs text-slate-500">Alert when the school publishes a new timetable</span></span><input type="checkbox" checked={notificationSettings.timetableChanges} onChange={e=>setNotificationSettings(s=>({...s,timetableChanges:e.target.checked}))}/></label></div><div className="mt-4 flex gap-2"><button type="button" disabled={busy} onClick={()=>void saveNotificationSettings()} className="flex-1 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-slate-950 disabled:opacity-50">Save preferences</button><button type="button" disabled={busy || !notificationsEnabled} onClick={()=>void sendTestNotification()} className="rounded-xl border border-slate-700 px-4 py-2.5 text-sm disabled:opacity-50">Send test</button></div></section>}{status === 'revoked' && !snapshot ? <div className="mt-5 rounded-2xl border border-red-500/20 bg-red-500/5 p-6 text-center"><ShieldCheck size={28} className="mx-auto text-red-300"/><h2 className="mt-3 font-semibold">Pairing unavailable</h2><p className="mt-2 text-sm text-slate-400">Ask the school timetable administrator to issue a new pairing.</p></div> : <div className="mt-5 space-y-4">{days.map(day=>{const lessons=(snapshot?.lessons||[]).filter(l=>l.day===day).sort((a,b)=>a.periodOrder-b.periodOrder);return <section key={day} className="rounded-2xl border border-slate-800 bg-slate-900 p-4"><div className="flex items-center justify-between"><h2 className="font-semibold">{DAYS[day]}</h2><span className="text-xs text-slate-500">{lessons.length} period{lessons.length===1?'':'s'}</span></div><div className="mt-3 space-y-2">{lessons.length?lessons.map((lesson,i)=><div key={`${lesson.periodOrder}-${lesson.subjectCode}-${i}`} className="rounded-xl border border-slate-800 bg-slate-950 p-3"><div className="flex items-start justify-between gap-3"><div><div className="font-semibold text-emerald-200">{lesson.subject}</div><div className="mt-1 text-sm text-slate-300">{lesson.className}</div><div className="mt-1 text-xs text-slate-500">{lesson.room}{lesson.roomCode?` · ${lesson.roomCode}`:''}</div></div><div className="text-right text-xs text-slate-400"><div>{lesson.start}–{lesson.end}</div><div className="mt-1">Lesson {lesson.periodOrder}</div>{lesson.lessonBlockType==='Double'&&<div className="mt-1 font-semibold text-amber-300">DOUBLE {lesson.doublePart || 1}/2</div>}</div></div></div>):<div className="rounded-xl border border-dashed border-slate-800 p-4 text-center text-xs text-slate-600">No scheduled lesson</div>}</div></section>})}</div>}<footer className="mt-6 text-center text-xs leading-5 text-slate-600">Read-only timetable · {snapshot?.academicYear || ''}{snapshot?.term ? ` · ${snapshot.term}` : ''}<br/>Last snapshot: {snapshot ? new Date(snapshot.version).toLocaleString() : 'none'}</footer></main></div>;
+}

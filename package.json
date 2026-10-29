@@ -9,12 +9,18 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "desktop:dev": "tauri dev",
-    "desktop:build": "tauri build"
+    "desktop:build": "tauri build",
+    "android:sync": "npm run build && cap sync android",
+    "android:open": "cap open android"
   },
   "dependencies": {
+    "@capacitor/android": "^7.4.3",
+    "@capacitor/core": "^7.4.3",
+    "@capacitor/local-notifications": "^7.0.2",
     "@tauri-apps/api": "^2.8.0",
     "@tauri-apps/plugin-sql": "^2.3.0",
     "lucide-react": "^0.469.0",
+    "qrcode": "^1.5.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
@@ -25,6 +31,8 @@
     "@tauri-apps/cli": "^2.8.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@capacitor/cli": "^7.4.3",
+    "@types/qrcode": "^1.5.5",
     "@vitejs/plugin-react": "^4.3.0",
     "autoprefixer": "^10.4.0",
     "postcss": "^8.4.0",

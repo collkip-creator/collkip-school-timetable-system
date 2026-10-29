@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { generateSchedule, validateSchedule, type ScheduleResult } from './scheduler';
 import { localStore, localStoreKeys } from './localStore';
+import { licensingApi } from './licensingClient';
+import SuperAdmin from './SuperAdmin';
+import { TeacherMobilePortal, TeacherMobileSync } from './TeacherMobile';
 import {
   Building2,
   CalendarClock,
@@ -19,6 +22,7 @@ import {
   Search,
   Settings2,
   ShieldCheck,
+  Smartphone,
   Trash2,
   Upload,
   UserRound,
@@ -43,6 +47,8 @@ type BellSchedule = { id: string; code: string; name: string; description: strin
 type Period = { id: string; scheduleId: string; order: number; name: string; start: string; end: string; type: 'Lesson' | 'Break' | 'Lunch' | 'Assembly' | 'Other'; status: Status };
 type SchoolClass = { id: string; code: string; name: string; level: string; stream: string; homeRoomId: string; scheduleId: string; status: Status; notes: string };
 type SchoolProfile = { name: string; code: string; motto: string; logo: string; address: string; county: string; country: string; telephone: string; email: string; website: string; academicYear: string; term: string; termStart: string; termEnd: string; schoolDays: number; timezone: string };
+type LicenseStatus = 'Active' | 'Trial' | 'Expired' | 'Suspended' | 'Revoked' | 'Pending Activation' | 'Grace Period';
+type LicenseRecord = { licenseId: string; licenseKey: string; schoolId: string; schoolName: string; licenseType: string; status: LicenseStatus; activationDate: string; expiryDate: string; maxDevices: number; deviceId: string; lastVerification: string; gracePeriodDays: number; verificationMode: 'local-foundation' | 'server-authoritative' };
 type AppData = { teachers: Teacher[]; subjects: Subject[]; classes: SchoolClass[]; rooms: Room[]; schedules: BellSchedule[]; periods: Period[]; teacherSubjects: { teacherId: string; subjectId: string }[]; roomCapabilities: { roomId: string; subjectId: string }[]; requirements: WeeklyRequirement[]; divisions: Division[]; combined: CombinedGroup[] };
 type ConstraintScope = 'school' | 'teachers' | 'classes' | 'subjects';
 type ParallelPair = { id: string; classId: string; subjectId: string };
@@ -64,6 +70,8 @@ const defaultRuleParameters = (category: string): Record<string, unknown> => ({
 const oldKey = localStoreKeys.legacyFoundation;
 const stateKey = localStoreKeys.foundation;
 const profileKey = localStoreKeys.schoolProfile;
+const licenseKey = localStoreKeys.license;
+const deviceKey = localStoreKeys.deviceId;
 
 const uid = (prefix: string) => `${prefix}-${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
 const esc = (value: unknown) => `"${String(value ?? '').replaceAll('"', '""')}"`;
@@ -145,6 +153,15 @@ const seed: AppData = {
 };
 
 const defaultProfile: SchoolProfile = { name: 'Collkip Demo School', code: 'COLLKIP', motto: 'Quality education, better tomorrow', logo: '', address: '', county: '', country: 'Kenya', telephone: '', email: '', website: '', academicYear: '2027', term: 'Term 1', termStart: '', termEnd: '', schoolDays: 5, timezone: 'Africa/Nairobi' };
+const emptyLicense: LicenseRecord = { licenseId: '', licenseKey: '', schoolId: '', schoolName: '', licenseType: 'Unactivated', status: 'Pending Activation', activationDate: '', expiryDate: '', maxDevices: 1, deviceId: '', lastVerification: '', gracePeriodDays: 14, verificationMode: 'local-foundation' };
+const createDeviceId = () => {
+  const existing = localStore.get<string>(deviceKey, '');
+  if (existing) return existing;
+  const value = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  localStore.set(deviceKey, value);
+  return value;
+};
+const licenseStatusTone = (status: LicenseStatus) => status === 'Active' ? 'emerald' : status === 'Trial' ? 'blue' : status === 'Grace Period' ? 'amber' : status === 'Pending Activation' ? 'slate' : 'rose';
 
 function migrate(): AppData {
   try {
@@ -184,11 +201,15 @@ const entityLabels: Record<EntityKey, string> = { teachers: 'Teachers', subjects
 function App() {
   const [data, setData] = useState<AppData>(() => migrate());
   const [profile, setProfile] = useState<SchoolProfile>(() => ({ ...defaultProfile, ...localStore.get<Partial<SchoolProfile>>(profileKey, {}) }));
-  const [section, setSection] = useState<'dashboard' | 'school' | 'constraints' | 'parallel' | 'readiness' | 'generator' | EntityKey>('dashboard');
+  const [license, setLicense] = useState<LicenseRecord>(() => ({ ...emptyLicense, ...localStore.get<Partial<LicenseRecord>>(licenseKey, {}) }));
+  const [deviceId] = useState(() => createDeviceId());
+  const [firstRun, setFirstRun] = useState(() => !localStore.get<Partial<SchoolProfile> | null>(profileKey, null));
+  const [section, setSection] = useState<'dashboard' | 'school' | 'constraints' | 'parallel' | 'readiness' | 'generator' | 'superadmin' | 'teacherSync' | EntityKey>('dashboard');
   const [constraints, setConstraints] = useState<ConstraintRecord[]>(() => { const value = localStore.get<unknown>(constraintsKey, []); return Array.isArray(value) ? value as ConstraintRecord[] : []; });
   const persistConstraints = (next: ConstraintRecord[]) => { setConstraints(next); localStore.set(constraintsKey, next); };
   const [query, setQuery] = useState('');
   const [mobileNav, setMobileNav] = useState(false);
+  const teacherPairingToken = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('teacherPair') : null;
   const [notice, setNotice] = useState('');
   const [issues, setIssues] = useState<string[]>([]);
   const [modal, setModal] = useState<{ type: 'record' | 'teacherSubjects' | 'schedulePeriods' | 'requirement' | 'division' | 'combined'; id?: string } | null>(null);
@@ -206,8 +227,48 @@ function App() {
   const persist = (next: AppData) => { setData(next); localStore.set(stateKey, next); };
   const requirementIssues = useMemo(() => phase2Issues(data), [data]);
   const saveProfile = (next: SchoolProfile) => { setProfile(next); localStore.set(profileKey, next); setNotice('School profile saved locally.'); };
+  const activateLicense = async (key: string) => {
+    const cleanKey = key.trim().toUpperCase();
+    if (!/^COLLKIP-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(cleanKey)) {
+      setNotice('Enter a license key in the format COLLKKIP-XXXX-XXXX-XXXX.');
+      return false;
+    }
+    try {
+      const response = await licensingApi.activate({ licenseKey: cleanKey, schoolCode: profile.code.trim().toUpperCase(), schoolName: profile.name.trim(), deviceId });
+      const serverLicense = response.license as Record<string, unknown>;
+      const next: LicenseRecord = { licenseId: String(serverLicense.licenseId || ''), licenseKey: cleanKey, schoolId: String(serverLicense.schoolId || profile.code.trim().toUpperCase()), schoolName: String(serverLicense.schoolName || profile.name.trim()), licenseType: String(serverLicense.licenseType || 'Annual'), status: String(serverLicense.status || 'Active') as LicenseStatus, activationDate: String(serverLicense.activationDate || new Date().toISOString()), expiryDate: String(serverLicense.expiryDate || ''), maxDevices: Number(serverLicense.maxDevices || 1), deviceId, lastVerification: String(serverLicense.lastVerification || new Date().toISOString()), gracePeriodDays: Number(serverLicense.gracePeriodDays || 14), verificationMode: 'server-authoritative' };
+      setLicense(next); localStore.set(licenseKey, next);
+      setNotice('License activated and verified by the Collkip cloud licensing service.');
+      return true;
+    } catch (err) { setNotice(err instanceof Error ? err.message : 'Online license activation failed. Existing school data was not changed.'); return false; }
+  };
+  const checkLicense = async () => {
+    if (!license.licenseId) { setNotice('No license is activated on this device.'); return; }
+    try {
+      const response = await licensingApi.verify({ licenseId: license.licenseId, deviceId });
+      const serverLicense = response.license as Record<string, unknown>;
+      const next = { ...license, status: String(serverLicense.status || license.status) as LicenseStatus, expiryDate: String(serverLicense.expiryDate || license.expiryDate), lastVerification: String(serverLicense.lastVerification || new Date().toISOString()), verificationMode: 'server-authoritative' as const };
+      setLicense(next); localStore.set(licenseKey, next); setNotice(`License verified by server: ${next.status}.`);
+    } catch (err) { setNotice(!navigator.onLine ? 'Collkip is offline. Your cached license remains available; the next online check will re-verify it with the server.' : err instanceof Error ? err.message : 'Server license verification failed. Your school data remains available.'); }
+  }; 
+  const createBackup = () => {
+    const payload = { format: 'collkip-workspace-backup-v1', createdAt: new Date().toISOString(), profile, data, constraints, parallelRules: localStore.get(localStoreKeys.parallelRules, []), timetableCandidate: localStore.get(localStoreKeys.timetableCandidate, null), timetableValid: localStore.get(localStoreKeys.timetableValid, null) };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${profile.code || 'collkip'}-workspace-backup.json`; a.click(); URL.revokeObjectURL(url); setNotice('Workspace backup downloaded.');
+  };
+  const restoreBackup = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const payload = JSON.parse(String(reader.result || '{}')) as { format?: string; profile?: SchoolProfile; data?: AppData; constraints?: ConstraintRecord[]; parallelRules?: unknown; timetableCandidate?: unknown; timetableValid?: unknown };
+        if (payload.format !== 'collkip-workspace-backup-v1' || !payload.profile?.name || !payload.data?.teachers || !payload.data?.subjects || !payload.data?.classes) throw new Error('Invalid Collkip backup');
+        setProfile(payload.profile); localStore.set(profileKey, payload.profile); setData(payload.data); localStore.set(stateKey, payload.data); setConstraints(Array.isArray(payload.constraints) ? payload.constraints : []); localStore.set(constraintsKey, Array.isArray(payload.constraints) ? payload.constraints : []); localStore.set(localStoreKeys.parallelRules, payload.parallelRules ?? []); localStore.set(localStoreKeys.timetableCandidate, payload.timetableCandidate ?? null); localStore.set(localStoreKeys.timetableValid, payload.timetableValid ?? null); setFirstRun(false); setNotice('Workspace restored successfully. Your current license and device identity were preserved.');
+      } catch { setNotice('That file is not a valid Collkip workspace backup. Nothing was changed.'); }
+    };
+    reader.readAsText(file);
+  };
   const totals = useMemo(() => Object.fromEntries(Object.keys(entityLabels).map(k => [k, data[k as EntityKey].length])), [data]);
-  const current = section !== 'dashboard' && section !== 'school' && section !== 'constraints' && section !== 'parallel' && section !== 'readiness' && section !== 'generator' ? data[section] : [];
+  const current = section !== 'dashboard' && section !== 'school' && section !== 'constraints' && section !== 'parallel' && section !== 'readiness' && section !== 'generator' && section !== 'superadmin' && section !== 'teacherSync' ? data[section] : [];
   const filtered = current.filter(item => Object.values(item).some(v => String(v ?? '').toLowerCase().includes(query.toLowerCase())));
 
   const teacherSubjectNames = (teacherId: string) => data.teacherSubjects.filter(x => x.teacherId === teacherId).map(x => data.subjects.find(s => s.id === x.subjectId)?.name).filter(Boolean) as string[];
@@ -230,14 +291,14 @@ function App() {
   }
 
   function resetDataset() {
-    if (section === 'dashboard' || section === 'school' || section === 'constraints' || section === 'parallel' || section === 'readiness') return;
+    if (section === 'dashboard' || section === 'school' || section === 'constraints' || section === 'parallel' || section === 'readiness' || section === 'superadmin' || section === 'teacherSync') return;
     if (!window.confirm(`Reset ${entityLabels[section]} to the starter dataset? Existing records in this dataset may be affected.`)) return;
     persist({ ...data, [section]: seed[section] });
     setNotice(`${entityLabels[section]} reset.`);
   }
 
   function deactivate(id: string) {
-    if (section === 'dashboard' || section === 'school' || section === 'constraints' || section === 'parallel' || section === 'readiness') return;
+    if (section === 'dashboard' || section === 'school' || section === 'constraints' || section === 'parallel' || section === 'readiness' || section === 'superadmin' || section === 'teacherSync') return;
     const item = data[section].find(x => x.id === id);
     if (!item) return;
     const nextStatus = item.status === 'Inactive' ? 'Active' : 'Inactive';
@@ -247,7 +308,7 @@ function App() {
   }
 
   function deleteRecord(id: string) {
-    if (section === 'dashboard' || section === 'school' || section === 'constraints' || section === 'parallel' || section === 'readiness') return;
+    if (section === 'dashboard' || section === 'school' || section === 'constraints' || section === 'parallel' || section === 'readiness' || section === 'superadmin' || section === 'teacherSync') return;
     const item = data[section].find(x => x.id === id);
     if (!item) return;
     const referenced = (section === 'teachers' && data.teacherSubjects.some(x => x.teacherId === id)) || (section === 'subjects' && (data.teacherSubjects.some(x => x.subjectId === id) || data.subjects.some(s => s.id !== id && s.doubleLessonRoomId === id))) || (section === 'schedules' && (data.classes.some(x => x.scheduleId === id) || data.periods.some(x => x.scheduleId === id))) || (section === 'rooms' && data.classes.some(x => x.homeRoomId === id));
@@ -270,7 +331,7 @@ function App() {
   }
 
   function exportDataset() {
-    if (section === 'dashboard' || section === 'school' || section === 'constraints' || section === 'parallel' || section === 'readiness') return;
+    if (section === 'dashboard' || section === 'school' || section === 'constraints' || section === 'parallel' || section === 'readiness' || section === 'superadmin' || section === 'teacherSync') return;
     let text = '';
     if (section === 'teachers') text = csv(['teacher_code','full_name','short_name','email','phone','department','status','subjects'], data.teachers.map(t => [t.code,t.name,t.shortName,t.email,t.phone,t.department,t.status,teacherSubjectNames(t.id).join('|')]));
     if (section === 'subjects') text = csv(['subject_code','subject_name','short_name','category','department','accepts_double_lesson','double_lesson_room_code','status','notes'], data.subjects.map(s => [s.code,s.name,s.shortName,s.category,s.department,s.acceptsDoubleLesson,s.doubleLessonRoomId === HOME_ROOM_OPTION ? 'HOME_ROOM' : (data.rooms.find(r => r.id === s.doubleLessonRoomId)?.code || ''),s.status,s.notes]));
@@ -283,7 +344,7 @@ function App() {
   }
 
   function importFile(file: File) {
-    if (section === 'dashboard' || section === 'school' || section === 'constraints' || section === 'parallel' || section === 'readiness') return;
+    if (section === 'dashboard' || section === 'school' || section === 'constraints' || section === 'parallel' || section === 'readiness' || section === 'superadmin' || section === 'teacherSync') return;
     const rows = parseCsv('');
     void rows;
     const reader = new FileReader();
@@ -326,35 +387,41 @@ function App() {
     reader.readAsText(file);
   }
 
-  const nav = (target: 'dashboard' | 'school' | 'constraints' | 'parallel' | 'readiness' | 'generator' | EntityKey) => { setSection(target); setQuery(''); setMobileNav(false); setIssues([]); }; 
+  const nav = (target: 'dashboard' | 'school' | 'constraints' | 'parallel' | 'readiness' | 'generator' | 'teacherSync' | EntityKey) => { setSection(target); setQuery(''); setMobileNav(false); setIssues([]); }; 
   const phase2Export = (kind: 'requirements'|'divisions'|'combined') => { const text = kind === 'requirements' ? csv(['class_code','subject_code','teacher_code','lessons_per_week','double_lessons_per_week','room_requirement','room_code','room_type','use_home_room','division_code','combined_group_code','priority','status','notes'], data.requirements.map(r=>[data.classes.find(c=>c.id===r.classId)?.code||'',data.subjects.find(s=>s.id===r.subjectId)?.code||'',data.teachers.find(t=>t.id===r.teacherId)?.code||'',r.lessonsPerWeek,data.subjects.find(s=>s.id===r.subjectId)?.acceptsDoubleLesson?(r.doubleLessonsPerWeek ?? 0):'',r.roomRequirement,data.rooms.find(x=>x.id===r.preferredRoomId)?.code||'',r.requiredRoomType,r.useHomeRoom,data.divisions.find(d=>d.id===r.divisionId)?.code||'',data.combined.find(c=>c.id===r.combinedGroupId)?.code||'',r.priority,r.status,r.notes])) : kind === 'divisions' ? csv(['division_code','name','class_code','description','status','members'], data.divisions.map(d=>[d.code,d.name,data.classes.find(c=>c.id===d.classId)?.code||'',d.description,d.status,d.members.map(m=>`${data.subjects.find(s=>s.id===m.subjectId)?.code||''}:${data.teachers.find(t=>t.id===m.teacherId)?.code||''}:${m.lessonsPerWeek}`).join('|')])) : csv(['combined_group_code','name','class_codes','subject_code','teacher_code','room_requirement','room_code','room_type','status','notes'], data.combined.map(c=>[c.code,c.name,c.classIds.map(id=>data.classes.find(x=>x.id===id)?.code||'').join('|'),data.subjects.find(s=>s.id===c.subjectId)?.code||'',data.teachers.find(t=>t.id===c.teacherId)?.code||'',c.roomRequirement,data.rooms.find(x=>x.id===c.preferredRoomId)?.code||'',c.requiredRoomType,c.status,c.notes])); download(`${kind}.csv`,text); setNotice(`${kind} exported.`); }; 
   const readiness = useMemo(() => { const mandatory = 8; let good = 0; if (profile.name && profile.logo) good += 1; if (data.subjects.length) good += 1; if (data.teachers.length && data.teachers.every(t => data.teacherSubjects.some(x => x.teacherId === t.id))) good += 1; if (data.schedules.length) good += 1; if (data.periods.every(p => data.schedules.some(s => s.id === p.scheduleId))) good += 1; if (data.rooms.length && data.rooms.every(r => r.roomType)) good += 1; if (data.classes.length && data.classes.every(c => data.schedules.some(s => s.id === c.scheduleId))) good += 1; if (data.teacherSubjects.every(x => data.teachers.some(t => t.id === x.teacherId) && data.subjects.some(s => s.id === x.subjectId))) good += 1; return Math.round((good / mandatory) * 100); }, [data, profile]);
 
+  if (teacherPairingToken) return <TeacherMobilePortal pairingToken={teacherPairingToken} />;
   return <div className="min-h-screen bg-slate-950 text-slate-100">
     <header className="sticky top-0 z-30 border-b border-slate-800 bg-slate-950/95 backdrop-blur"><div className="mx-auto flex h-16 max-w-[1600px] items-center gap-3 px-4 lg:px-6">
       <button className="rounded-lg p-2 hover:bg-slate-800 lg:hidden" onClick={() => setMobileNav(true)} aria-label="Open navigation"><Menu size={20} /></button>
       <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500 font-black text-slate-950">C</div><div><div className="font-bold">COLLKIP</div><div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">School Timetable System</div></div>
-      <div className="ml-auto hidden items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-300 md:flex"><ShieldCheck size={14} /> Phase 1 Foundation</div>
+      <div className="ml-auto flex items-center gap-2 rounded-full border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs text-slate-300"><span className={`h-2 w-2 rounded-full bg-${licenseStatusTone(license.status)}-400`} /><span className="hidden sm:inline">{license.status === 'Pending Activation' ? 'License setup required' : `License ${license.status}`}</span><ShieldCheck size={14} /></div>
     </div></header>
     <div className="mx-auto flex max-w-[1600px]">
       <aside className={`${mobileNav ? 'fixed inset-y-0 left-0 z-50 flex w-72' : 'hidden'} w-64 shrink-0 border-r border-slate-800 bg-slate-950 lg:flex`}><div className="flex w-full flex-col p-4">
         <div className="mb-4 flex items-center justify-between px-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Workspace <button className="lg:hidden" onClick={() => setMobileNav(false)}><X size={18} /></button></div>
         <NavButton icon={<LayoutDashboard size={17} />} label="Dashboard" active={section === 'dashboard'} onClick={() => nav('dashboard')} />
-        <NavButton icon={<Building2 size={17} />} label="School Setup" active={section === 'school'} onClick={() => nav('school')} />
+        <NavButton icon={<Building2 size={17} />} label="School Setup & Settings" active={section === 'school'} onClick={() => nav('school')} />
         <div className="my-4 border-t border-slate-800" />
         {(Object.keys(entityLabels) as EntityKey[]).map(key => <NavButton key={key} icon={<EntityIcon type={key} />} label={entityLabels[key]} count={totals[key] as number} active={section === key} onClick={() => nav(key)} />)}
         <NavButton icon={<Settings2 size={17} />} label="Constraints" count={constraints.length} active={section === 'constraints'} onClick={() => nav('constraints')} />
         <NavButton icon={<CalendarClock size={17} />} label="Parallel Lessons" active={section === 'parallel'} onClick={() => nav('parallel')} />
         <NavButton icon={<ShieldCheck size={17} />} label="Scheduling Readiness" active={section === 'readiness'} onClick={() => nav('readiness')} />
         <NavButton icon={<CalendarClock size={17} />} label="Generate Timetable" active={section === 'generator'} onClick={() => nav('generator')} />
+        <NavButton icon={<Smartphone size={17} />} label="Teacher Mobile Sync" active={section === 'teacherSync'} onClick={() => nav('teacherSync')} />
+        <div className="my-4 border-t border-slate-800" />
+        <NavButton icon={<ShieldCheck size={17} />} label="Super Admin Portal" active={section === 'superadmin'} onClick={() => nav('superadmin')} />
         <div className="mt-auto rounded-xl border border-slate-800 bg-slate-900 p-3 text-xs leading-5 text-slate-500"><div className="mb-1 flex items-center gap-2 text-slate-300"><Database size={14} /> Local-first foundation</div>Core records persist locally in this workspace and use stable IDs for future desktop/offline synchronization.</div>
       </div></aside>
       {mobileNav && <button className="fixed inset-0 z-40 bg-black/60 lg:hidden" onClick={() => setMobileNav(false)} aria-label="Close navigation" />}
       <main className="min-w-0 flex-1 p-4 lg:p-7">
         {notice && <div role="status" aria-live="polite" className={`mb-5 flex items-center gap-3 rounded-xl border px-4 py-3 text-sm ${notice.startsWith('LOCAL SAVE ERROR:') ? 'border-rose-500/30 bg-rose-500/10 text-rose-200' : 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200'}`}><CheckCircle2 size={17} />{notice}<button className="ml-auto" onClick={() => setNotice('')} aria-label="Dismiss notice"><X size={15} /></button></div>}
         {section === 'dashboard' && <Dashboard profile={profile} totals={totals} readiness={readiness} issues={issues} onNavigate={nav} onValidate={validate} />}
-        {section === 'school' && <SchoolSetup profile={profile} onSave={saveProfile} />}
-        {section !== 'dashboard' && section !== 'school' && section !== 'constraints' && section !== 'parallel' && section !== 'readiness' && section !== 'generator' && !['requirements','divisions','combined'].includes(section) && <DataManager section={section} items={filtered} total={current.length} query={query} setQuery={setQuery} onAdd={() => setModal({ type: 'record' })} onEdit={id => setModal({ type: 'record', id })} onDelete={deleteRecord} onDeactivate={deactivate} onReset={resetDataset} onImport={() => fileRef.current?.click()} onTemplate={() => templateFor(section)} onExport={exportDataset} onValidate={validate} extra={(section === 'teachers' ? 'teacherSubjects' : section === 'schedules' ? 'schedulePeriods' : undefined)} onExtra={id => setModal({ type: section === 'teachers' ? 'teacherSubjects' : 'schedulePeriods', id })} />}
+        {section === 'school' && <SchoolSetup profile={profile} onSave={saveProfile} license={license} deviceId={deviceId} firstRun={firstRun} onActivate={activateLicense} onVerify={checkLicense} onBackup={createBackup} onRestore={restoreBackup} onCompleteOnboarding={() => { setFirstRun(false); setNotice('School workspace setup complete.'); }} />}
+        {section === 'superadmin' && <SuperAdmin />}
+        {section === 'teacherSync' && <TeacherMobileSync data={data} profile={profile} license={license} deviceId={deviceId} />}
+        {section !== 'dashboard' && section !== 'school' && section !== 'constraints' && section !== 'parallel' && section !== 'readiness' && section !== 'generator' && section !== 'superadmin' && section !== 'teacherSync' && !['requirements','divisions','combined'].includes(section) && <DataManager section={section} items={filtered} total={current.length} query={query} setQuery={setQuery} onAdd={() => setModal({ type: 'record' })} onEdit={id => setModal({ type: 'record', id })} onDelete={deleteRecord} onDeactivate={deactivate} onReset={resetDataset} onImport={() => fileRef.current?.click()} onTemplate={() => templateFor(section)} onExport={exportDataset} onValidate={validate} extra={(section === 'teachers' ? 'teacherSubjects' : section === 'schedules' ? 'schedulePeriods' : undefined)} onExtra={id => setModal({ type: section === 'teachers' ? 'teacherSubjects' : 'schedulePeriods', id })} />}
         {section === 'requirements' && <RequirementsManager data={data} persist={persist} query={query} setQuery={setQuery} setNotice={setNotice} open={(id)=>setModal({type:'requirement',id})} openCombined={()=>setModal({type:'combined'})} exportData={()=>phase2Export('requirements')} />}
         {section === 'divisions' && <DivisionsManager data={data} persist={persist} query={query} setQuery={setQuery} setNotice={setNotice} open={(id)=>setModal({type:'division',id})} exportData={()=>phase2Export('divisions')} />}
         {section === 'combined' && <CombinedManager data={data} persist={persist} query={query} setQuery={setQuery} setNotice={setNotice} open={(id)=>setModal({type:'combined',id})} exportData={()=>phase2Export('combined')} />}\n        {section === 'constraints' && <ConstraintsManager data={data} constraints={constraints} persist={persistConstraints} setNotice={setNotice} />}
@@ -364,6 +431,7 @@ function App() {
       </main>
     </div>
     <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) importFile(f); e.currentTarget.value = ''; }} />
+    <input id="collkip-backup-input" type="file" accept="application/json,.json" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) restoreBackup(f); e.currentTarget.value = ''; }} />
     {modal?.type === 'record' && <RecordModal section={section as EntityKey} id={modal.id} data={data} persist={persist} close={() => setModal(null)} setNotice={setNotice} />}
     {modal?.type === 'teacherSubjects' && <TeacherSubjectsModal teacherId={modal.id || ''} data={data} persist={persist} close={() => setModal(null)} />}
     {modal?.type === 'schedulePeriods' && <SchedulePeriodsModal scheduleId={modal.id || ''} data={data} persist={persist} close={() => setModal(null)} />}
@@ -383,13 +451,27 @@ function Dashboard({ profile, totals, readiness, issues, onNavigate, onValidate 
   </div>;
 }
 
-function SchoolSetup({ profile, onSave }: { profile: SchoolProfile; onSave: (p: SchoolProfile) => void }) {
+function SchoolSetup({ profile, onSave, license, deviceId, firstRun, onActivate, onVerify, onBackup, onRestore, onCompleteOnboarding }: { profile: SchoolProfile; onSave: (p: SchoolProfile) => void; license: LicenseRecord; deviceId: string; firstRun: boolean; onActivate: (key: string) => Promise<boolean>; onVerify: () => void; onBackup: () => void; onRestore: (file: File) => void; onCompleteOnboarding: () => void }) {
   const [draft, setDraft] = useState(profile);
+  const [tab, setTab] = useState<'school'|'license'|'data'|'application'>('school');
+  const [licenseInput, setLicenseInput] = useState(license.licenseKey);
   const update = (key: keyof SchoolProfile, value: string | number) => setDraft(p => ({ ...p, [key]: value }));
-  const fields: [keyof SchoolProfile, string, string][] = [['name','School name','e.g. Collkip High School'],['code','School code','e.g. CHS'],['motto','Motto','School motto'],['address','Address','Physical or postal address'],['county','County','e.g. Nakuru'],['country','Country','Kenya'],['telephone','Telephone','School telephone'],['email','Email','school@example.com'],['website','Website','https://example.com'],['academicYear','Academic year','2027'],['term','Current term','Term 1'],['termStart','Term start','YYYY-MM-DD'],['termEnd','Term end','YYYY-MM-DD'],['timezone','Timezone','Africa/Nairobi']];
-  return <div className="max-w-6xl space-y-6"><div><div className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-400">School setup</div><h1 className="mt-2 text-3xl font-bold">School profile</h1><p className="mt-2 text-sm text-slate-500">School identity and academic information used by future timetable printouts and exports.</p></div><div className="grid gap-6 lg:grid-cols-[1fr_280px]"><div className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><div className="grid gap-4 md:grid-cols-2">{fields.map(([key,label,placeholder]) => <label key={key} className="space-y-2"><span className="text-sm font-medium text-slate-300">{label}</span><input type={key.includes('Start') || key.includes('End') ? 'date' : 'text'} value={String(draft[key] ?? '')} onChange={e => update(key,e.target.value)} placeholder={placeholder} className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm outline-none focus:border-emerald-500" /></label>)}<label className="space-y-2"><span className="text-sm font-medium text-slate-300">Number of school days</span><input type="number" min="1" max="7" value={draft.schoolDays} onChange={e => update('schoolDays',Number(e.target.value))} className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm" /></label></div><div className="mt-5 flex justify-end"><button onClick={() => onSave(draft)} className="rounded-xl bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-slate-950">Save school profile</button></div></div><LogoCard logo={draft.logo} onChange={logo => setDraft(p => ({ ...p, logo }))} /></div></div>;
+  const fields: [keyof SchoolProfile, string, string][] = [['name','School name','e.g. Collkip High School'],['code','School code','e.g. CHS'],['address','Address','Physical or postal address'],['county','County','e.g. Nakuru'],['country','Country','Kenya'],['telephone','Telephone','School telephone'],['email','Email','school@example.com'],['website','Website','https://example.com'],['academicYear','Academic year','2027'],['term','Current term','Term 1'],['termStart','Term start','YYYY-MM-DD'],['termEnd','Term end','YYYY-MM-DD'],['timezone','Timezone','Africa/Nairobi']];
+  const saveAndContinue = () => { onSave(draft); if (!draft.name.trim() || !draft.code.trim() || !draft.academicYear.trim() || !draft.term.trim()) return; setTab('license'); };
+  const activated = license.status === 'Active' || license.status === 'Trial' || license.status === 'Grace Period';
+  return <div className="max-w-6xl space-y-6">
+    <div><div className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-400">{firstRun ? 'Welcome to Collkip' : 'School workspace'}</div><h1 className="mt-2 text-3xl font-bold">School Setup & Settings</h1><p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">{firstRun ? 'Create your school workspace, activate an evaluation license, and then continue into the timetable system.' : 'Manage school identity, licensing, backups, and application information without exposing database internals.'}</p></div>
+    {firstRun && <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-5"><div className="font-semibold text-emerald-200">First-run setup</div><div className="mt-1 text-sm text-slate-400">Step 1: school profile → Step 2: license → Step 3: enter the workspace.</div></div>}
+    <div className="flex flex-wrap gap-2 border-b border-slate-800 pb-3">{([['school','School'],['license','License'],['data','Data'],['application','Application']] as const).map(([key,label])=><button key={key} onClick={()=>setTab(key)} className={`rounded-lg px-3 py-2 text-sm ${tab===key?'bg-emerald-500/10 text-emerald-300':'text-slate-400 hover:bg-slate-900'}`}>{label}</button>)}</div>
+    {tab==='school' && <div className="grid gap-6 lg:grid-cols-[1fr_280px]"><div className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><div className="grid gap-4 md:grid-cols-2">{fields.map(([key,label,placeholder])=><label key={key} className="space-y-2"><span className="text-sm font-medium text-slate-300">{label}{['name','code','academicYear','term'].includes(key)?' *':''}</span><input type={key==='termStart'||key==='termEnd'?'date':'text'} value={String(draft[key]??'')} onChange={e=>update(key,e.target.value)} placeholder={placeholder} className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm outline-none focus:border-emerald-500" /></label>)}<label className="space-y-2"><span className="text-sm font-medium text-slate-300">Motto</span><input value={draft.motto} onChange={e=>update('motto',e.target.value)} placeholder="School motto" className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm" /></label><label className="space-y-2"><span className="text-sm font-medium text-slate-300">Number of school days</span><input type="number" min="1" max="7" value={draft.schoolDays} onChange={e=>update('schoolDays',Math.min(7,Math.max(1,Number(e.target.value)||1)))} className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm" /></label></div><div className="mt-5 flex justify-end"><button onClick={saveAndContinue} className="rounded-xl bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-slate-950">Save school profile</button></div></div><LogoCard logo={draft.logo} onChange={logo=>setDraft(p=>({...p,logo}))}/></div>}
+    {tab==='license' && <div className="grid gap-5 lg:grid-cols-[1fr_320px]"><div className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><div className="text-lg font-semibold">Activate Collkip</div><p className="mt-1 text-sm text-slate-500">License activation is now checked against the Collkip cloud licensing service. If the computer is offline, the existing cached license and school data remain available.</p><label className="mt-5 block space-y-2"><span className="text-sm font-medium text-slate-300">License key</span><input value={licenseInput} onChange={e=>setLicenseInput(e.target.value.toUpperCase())} placeholder="COLLKIP-XXXX-XXXX-XXXX" className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-3 font-mono text-sm tracking-wide" /></label><label className="mt-4 block space-y-2"><span className="text-sm font-medium text-slate-300">School code</span><input value={draft.code} readOnly className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-3 text-sm text-slate-500" /></label><div className="mt-5 flex flex-wrap gap-2"><button onClick={async ()=>{ if(await onActivate(licenseInput)) setLicenseInput(licenseInput.trim().toUpperCase()); }} className="rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-slate-950">Activate license</button><button onClick={onVerify} className="rounded-xl border border-slate-700 px-4 py-2.5 text-sm">Check license record</button></div></div><LicenseCard license={license} deviceId={deviceId}/></div>}
+    {tab==='data' && <div className="grid gap-5 md:grid-cols-2"><div className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><div className="text-lg font-semibold">Backup workspace</div><p className="mt-1 text-sm leading-6 text-slate-500">Create a portable JSON backup of the school workspace, constraints, timetable candidates, and last valid timetable. Licensing and device identity are deliberately excluded.</p><button onClick={onBackup} className="mt-5 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-slate-950">Download backup</button></div><div className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><div className="text-lg font-semibold">Restore workspace</div><p className="mt-1 text-sm leading-6 text-slate-500">Restoring replaces the current school workspace after you choose a backup. Your current license and device identity are preserved.</p><button onClick={()=>document.getElementById('collkip-backup-input')?.click()} className="mt-5 rounded-xl border border-slate-700 px-4 py-2.5 text-sm">Choose backup</button><div className="mt-3 text-xs text-amber-300">Only restore a trusted Collkip backup file.</div></div></div>}
+    {tab==='application' && <div className="grid gap-5 md:grid-cols-2"><div className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><div className="text-lg font-semibold">Application</div><dl className="mt-4 space-y-3 text-sm"><div className="flex justify-between gap-4"><dt className="text-slate-500">Version</dt><dd className="font-medium">0.0.1</dd></div><div className="flex justify-between gap-4"><dt className="text-slate-500">Storage</dt><dd className="font-medium">Local-first / SQLite desktop</dd></div><div className="flex justify-between gap-4"><dt className="text-slate-500">Time zone</dt><dd className="font-medium">{profile.timezone || 'Africa/Nairobi'}</dd></div></dl></div><div className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><div className="text-lg font-semibold">Device</div><p className="mt-2 text-sm text-slate-500">This identifier is generated once and persisted locally. It does not contain personal information.</p><div className="mt-4 rounded-xl border border-slate-800 bg-slate-950 p-3 font-mono text-xs text-slate-300 break-all">{deviceId}</div><div className="mt-3 text-xs text-slate-500">Displayed device ID: {deviceId.slice(0,8).toUpperCase()}</div></div></div>}
+    {firstRun && activated && draft.name.trim() && draft.code.trim() && draft.academicYear.trim() && draft.term.trim() && <div className="flex justify-end"><button onClick={()=>{ onSave(draft); onCompleteOnboarding(); }} className="rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-slate-950">Continue to Collkip</button></div>}
+  </div>;
 }
-function LogoCard({ logo, onChange }: { logo: string; onChange: (v: string) => void }) { const ref = useRef<HTMLInputElement>(null); return <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><div className="text-sm font-semibold">School logo</div><p className="mt-1 text-xs leading-5 text-slate-500">PNG, JPG/JPEG or WebP. Keep the image reasonably sized for fast offline use.</p><div className="mt-4 flex h-44 items-center justify-center overflow-hidden rounded-xl border border-dashed border-slate-700 bg-slate-950">{logo ? <img src={logo} alt="School logo preview" className="h-full w-full object-contain" /> : <Building2 className="text-slate-700" size={44} />}</div><input ref={ref} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={e => { const f=e.target.files?.[0]; if (!f) return; if (f.size > 2*1024*1024) { alert('Logo must be 2 MB or smaller.'); return; } const reader=new FileReader(); reader.onload=()=>onChange(String(reader.result||'')); reader.readAsDataURL(f); e.currentTarget.value=''; }} /><div className="mt-3 flex gap-2"><button onClick={() => ref.current?.click()} className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800"><Upload size={15} /> {logo ? 'Replace' : 'Upload'}</button>{logo && <button onClick={() => onChange('')} className="rounded-xl border border-red-500/20 px-3 py-2 text-sm text-red-300 hover:bg-red-500/10">Remove</button>}</div></div>; }
+function LicenseCard({ license, deviceId }: { license: LicenseRecord; deviceId: string }) { const tone = licenseStatusTone(license.status); return <div className="rounded-2xl border border-slate-800 bg-slate-950 p-5"><div className="text-xs font-semibold uppercase tracking-wider text-slate-500">License status</div><div className={`mt-2 inline-flex rounded-full bg-${tone}-500/10 px-3 py-1 text-sm font-semibold text-${tone}-300`}>{license.status}</div><dl className="mt-5 space-y-3 text-sm"><div className="flex justify-between gap-4"><dt className="text-slate-500">School</dt><dd className="text-right">{license.schoolName || 'Not activated'}</dd></div><div className="flex justify-between gap-4"><dt className="text-slate-500">Type</dt><dd>{license.licenseType}</dd></div><div className="flex justify-between gap-4"><dt className="text-slate-500">Expires</dt><dd>{license.expiryDate ? new Date(license.expiryDate).toLocaleDateString() : '—'}</dd></div><div className="flex justify-between gap-4"><dt className="text-slate-500">Last check</dt><dd>{license.lastVerification ? new Date(license.lastVerification).toLocaleString() : '—'}</dd></div><div className="flex justify-between gap-4"><dt className="text-slate-500">Device</dt><dd className="font-mono">{deviceId.slice(0,8).toUpperCase()}</dd></div></dl><p className="mt-5 text-xs leading-5 text-slate-500">The server is authoritative for activation, expiry, suspension, revocation, renewal, and device limits. Timetable and school data remain local and are never deleted because a license changes state.</p></div> }
+function LogoCard({ logo, onChange }: { logo: string; onChange: (v: string) => void }) { const ref = useRef<HTMLInputElement>(null); return <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><div className="text-sm font-semibold">School logo</div><p className="mt-1 text-xs leading-5 text-slate-500">PNG, JPG/JPEG or WebP. Keep the image reasonably sized for fast offline use.</p><div className="mt-4 flex h-44 items-center justify-center overflow-hidden rounded-xl border border-dashed border-slate-700 bg-slate-950">{logo ? <img src={logo} alt="School logo preview" className="h-full w-full object-contain" /> : <Building2 className="text-slate-700" size={44} />}</div><input ref={ref} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={e=>{const f=e.target.files?.[0];if(!f)return;if(f.size>2*1024*1024){alert('Logo must be 2 MB or smaller.');return;}const reader=new FileReader();reader.onload=()=>onChange(String(reader.result||''));reader.readAsDataURL(f);e.currentTarget.value='';}}/><div className="mt-3 flex gap-2"><button onClick={()=>ref.current?.click()} className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800"><Upload size={15}/>{logo?'Replace':'Upload'}</button>{logo&&<button onClick={()=>onChange('')} className="rounded-xl border border-red-500/20 px-3 py-2 text-sm text-red-300 hover:bg-red-500/10">Remove</button>}</div></div>; }
 
 function DataManager({ section, items, total, query, setQuery, onAdd, onEdit, onDelete, onDeactivate, onReset, onImport, onTemplate, onExport, onValidate, extra, onExtra }: { section: EntityKey; items: Array<Teacher | Subject | SchoolClass | Room | BellSchedule | Period>; total: number; query: string; setQuery: (x:string)=>void; onAdd:()=>void; onEdit:(id:string)=>void; onDelete:(id:string)=>void; onDeactivate:(id:string)=>void; onReset:()=>void; onImport:()=>void; onTemplate:()=>void; onExport:()=>void; onValidate:()=>void; extra?: 'teacherSubjects'|'schedulePeriods'; onExtra:(id:string)=>void }) {
   return <div className="space-y-5"><div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between"><div><div className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-400">Foundation data</div><h1 className="mt-2 text-3xl font-bold">{entityLabels[section]}</h1><p className="mt-2 text-sm text-slate-500">{total} record{total===1?'':'s'} · Create, edit, validate, import and export.</p></div><div className="flex flex-wrap gap-2"><button onClick={onTemplate} className="flex items-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800"><Download size={15}/> Template</button><button onClick={onImport} className="flex items-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800"><Upload size={15}/> Import CSV</button><button onClick={onExport} className="flex items-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800"><Download size={15}/> Export</button><button onClick={onValidate} className="rounded-xl border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800">Validate</button><button onClick={onAdd} className="flex items-center gap-2 rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950"><Plus size={15}/> Add</button></div></div><div className="flex flex-col gap-3 sm:flex-row"><div className="relative flex-1"><Search size={17} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-600"/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder={`Search ${entityLabels[section].toLowerCase()}...`} className="w-full rounded-xl border border-slate-800 bg-slate-900 py-2.5 pl-10 pr-3 text-sm outline-none focus:border-emerald-500"/></div><button onClick={onReset} className="flex items-center justify-center gap-2 rounded-xl border border-red-500/20 px-4 py-2.5 text-sm text-red-300 hover:bg-red-500/10"><RefreshCcw size={15}/> Reset dataset</button></div><div className="overflow-x-auto rounded-2xl border border-slate-800 bg-slate-900"><table className="w-full min-w-[850px] text-sm"><thead><tr className="border-b border-slate-800 text-left text-xs uppercase tracking-wider text-slate-500">{columns(section).map(c=><th key={c} className="px-5 py-3">{c}</th>)}<th className="px-5 py-3">Actions</th></tr></thead><tbody>{items.length===0?<tr><td colSpan={columns(section).length+1} className="p-10 text-center text-slate-500">No records match your search.</td></tr>:items.map(item=><tr key={item.id} className="border-b border-slate-800/80 last:border-0"><td className="px-5 py-4 font-medium">{displayPrimary(section,item)}</td><td className="px-5 py-4 text-slate-400">{displaySecondary(section,item)}</td><td className="px-5 py-4 text-slate-400">{displayThird(section,item)}</td><td className="px-5 py-4"><StatusBadge status={item.status}/></td><td className="px-5 py-4"><div className="flex items-center gap-1"><button title="Edit" onClick={()=>onEdit(item.id)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-800 hover:text-emerald-300"><Edit3 size={16}/></button>{extra&&<button title={extra==='teacherSubjects'?'Manage subjects':'Manage periods'} onClick={()=>onExtra(item.id)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-800 hover:text-emerald-300">{extra==='teacherSubjects'?<UserRound size={16}/>:<CalendarClock size={16}/>}</button>}<button title="Activate/deactivate" onClick={()=>onDeactivate(item.id)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-800 hover:text-amber-300"><ShieldCheck size={16}/></button><button title="Delete" onClick={()=>onDelete(item.id)} className="rounded-lg p-2 text-slate-500 hover:bg-red-500/10 hover:text-red-300"><Trash2 size={16}/></button></div></td></tr>)}</tbody></table></div><div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4 text-xs leading-5 text-slate-500">{helpText(section)}</div></div>;

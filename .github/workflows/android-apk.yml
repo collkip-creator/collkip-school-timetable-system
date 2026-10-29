@@ -1,0 +1,49 @@
+name: Build Collkip Teacher Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'capacitor.config.ts'
+      - '.github/workflows/android-apk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install dependencies
+        run: npm install
+      - name: Build web assets
+        run: npm run build
+      - name: Generate Android platform if missing
+        shell: bash
+        run: |
+          if [ ! -d android ]; then npx cap add android; fi
+      - name: Sync Capacitor plugins and web assets
+        run: npx cap sync android
+      - name: Build debug APK
+        run: cd android && ./gradlew assembleDebug
+      - name: Upload pilot APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: collkip-teacher-android-pilot-apk
+          if-no-files-found: error
+          path: android/app/build/outputs/apk/debug/app-debug.apk
