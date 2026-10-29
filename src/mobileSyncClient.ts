@@ -1,3 +1,7 @@
+import { Capacitor } from '@capacitor/core';
+import { CapacitorHttp } from '@capacitor/core';
+import { invoke } from '@tauri-apps/api/core';
+
 type ApiResponse = { data: unknown };
 type AppDeployClient = {
   api: {
@@ -36,8 +40,11 @@ const request = async (
   path: string,
   body: Record<string, unknown>
 ) => {
-  // Keep the existing native desktop transport unchanged.
-  // The desktop app uses the Tauri command for its licensed API requests.
+  /*
+   * DESKTOP
+   *
+   * Keep the existing Tauri transport completely unchanged.
+   */
   if (isDesktop()) {
     const raw = await invoke<string>('collkip_license_request', {
       url: `${API_BASE}${path}`,
@@ -48,11 +55,55 @@ const request = async (
   }
 
   /*
-   * Android and browser:
+   * ANDROID
    *
-   * Use AppDeploy's supported API client instead of CapacitorHttp.
-   * This allows requests to /api/* to go through AppDeploy's
-   * platform-managed API transport.
+   * Use Capacitor's native HTTP implementation.
+   * This avoids WebView fetch/CORS restrictions.
+   */
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const response = await CapacitorHttp.post({
+        url: `${API_BASE}${path}`,
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          Origin: API_BASE,
+        },
+        data: body,
+        connectTimeout: 15000,
+        readTimeout: 20000,
+      });
+
+      const payload = parseResponse(response.data);
+
+      if (response.status < 200 || response.status >= 300) {
+        const message =
+          typeof payload.error === 'string'
+            ? payload.error
+            : typeof payload.message === 'string'
+              ? payload.message
+              : `The Collkip API returned HTTP ${response.status} for ${path}.`;
+
+        throw new Error(message);
+      }
+
+      return payload;
+    } catch (err) {
+      const detail =
+        err instanceof Error
+          ? err.message
+          : String(err ?? 'Unknown native network error');
+
+      throw new Error(
+        `Collkip Android API request failed (${path}). ${detail}`
+      );
+    }
+  }
+
+  /*
+   * HOSTED WEB APP
+   *
+   * Keep AppDeploy's supported API client for the normal browser app.
    */
   try {
     const client = await import(
