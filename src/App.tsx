@@ -3,7 +3,7 @@ import { generateSchedule, validateSchedule, type ScheduleResult } from './sched
 import { localStore, localStoreKeys } from './localStore';
 import { licensingApi } from './licensingClient';
 import SuperAdmin from './SuperAdmin';
-import { TeacherMobilePortal, TeacherMobileSync } from './TeacherMobile';
+import { TeacherMobileSync } from './TeacherMobile';
 import {
   Building2,
   CalendarClock,
@@ -209,7 +209,6 @@ function App() {
   const persistConstraints = (next: ConstraintRecord[]) => { setConstraints(next); localStore.set(constraintsKey, next); };
   const [query, setQuery] = useState('');
   const [mobileNav, setMobileNav] = useState(false);
-  const teacherPairingToken = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('teacherPair') : null;
   const [notice, setNotice] = useState('');
   const [issues, setIssues] = useState<string[]>([]);
   const [modal, setModal] = useState<{ type: 'record' | 'teacherSubjects' | 'schedulePeriods' | 'requirement' | 'division' | 'combined'; id?: string } | null>(null);
@@ -391,7 +390,6 @@ function App() {
   const phase2Export = (kind: 'requirements'|'divisions'|'combined') => { const text = kind === 'requirements' ? csv(['class_code','subject_code','teacher_code','lessons_per_week','double_lessons_per_week','room_requirement','room_code','room_type','use_home_room','division_code','combined_group_code','priority','status','notes'], data.requirements.map(r=>[data.classes.find(c=>c.id===r.classId)?.code||'',data.subjects.find(s=>s.id===r.subjectId)?.code||'',data.teachers.find(t=>t.id===r.teacherId)?.code||'',r.lessonsPerWeek,data.subjects.find(s=>s.id===r.subjectId)?.acceptsDoubleLesson?(r.doubleLessonsPerWeek ?? 0):'',r.roomRequirement,data.rooms.find(x=>x.id===r.preferredRoomId)?.code||'',r.requiredRoomType,r.useHomeRoom,data.divisions.find(d=>d.id===r.divisionId)?.code||'',data.combined.find(c=>c.id===r.combinedGroupId)?.code||'',r.priority,r.status,r.notes])) : kind === 'divisions' ? csv(['division_code','name','class_code','description','status','members'], data.divisions.map(d=>[d.code,d.name,data.classes.find(c=>c.id===d.classId)?.code||'',d.description,d.status,d.members.map(m=>`${data.subjects.find(s=>s.id===m.subjectId)?.code||''}:${data.teachers.find(t=>t.id===m.teacherId)?.code||''}:${m.lessonsPerWeek}`).join('|')])) : csv(['combined_group_code','name','class_codes','subject_code','teacher_code','room_requirement','room_code','room_type','status','notes'], data.combined.map(c=>[c.code,c.name,c.classIds.map(id=>data.classes.find(x=>x.id===id)?.code||'').join('|'),data.subjects.find(s=>s.id===c.subjectId)?.code||'',data.teachers.find(t=>t.id===c.teacherId)?.code||'',c.roomRequirement,data.rooms.find(x=>x.id===c.preferredRoomId)?.code||'',c.requiredRoomType,c.status,c.notes])); download(`${kind}.csv`,text); setNotice(`${kind} exported.`); }; 
   const readiness = useMemo(() => { const mandatory = 8; let good = 0; if (profile.name && profile.logo) good += 1; if (data.subjects.length) good += 1; if (data.teachers.length && data.teachers.every(t => data.teacherSubjects.some(x => x.teacherId === t.id))) good += 1; if (data.schedules.length) good += 1; if (data.periods.every(p => data.schedules.some(s => s.id === p.scheduleId))) good += 1; if (data.rooms.length && data.rooms.every(r => r.roomType)) good += 1; if (data.classes.length && data.classes.every(c => data.schedules.some(s => s.id === c.scheduleId))) good += 1; if (data.teacherSubjects.every(x => data.teachers.some(t => t.id === x.teacherId) && data.subjects.some(s => s.id === x.subjectId))) good += 1; return Math.round((good / mandatory) * 100); }, [data, profile]);
 
-  if (teacherPairingToken) return <TeacherMobilePortal pairingToken={teacherPairingToken} />;
   return <div className="min-h-screen bg-slate-950 text-slate-100">
     <header className="sticky top-0 z-30 border-b border-slate-800 bg-slate-950/95 backdrop-blur"><div className="mx-auto flex h-16 max-w-[1600px] items-center gap-3 px-4 lg:px-6">
       <button className="rounded-lg p-2 hover:bg-slate-800 lg:hidden" onClick={() => setMobileNav(true)} aria-label="Open navigation"><Menu size={20} /></button>
