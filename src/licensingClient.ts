@@ -7,7 +7,7 @@ declare global {
   interface Window { __TAURI_INTERNALS__?: unknown; }
 }
 
-const API_BASE = 'https://collkip-school-timetable-system-6h732l.v2.appdeploy.ai';
+const API_BASE = 'https://api-v2.appdeploy.ai/app/collkip-school-timetable-system-6h732l';
 const isDesktop = () => typeof window !== 'undefined' && window.__TAURI_INTERNALS__ !== undefined;
 
 const parseResponse = (value: unknown) => typeof value === 'string' ? JSON.parse(value) as Record<string, unknown> : value as Record<string, unknown>;

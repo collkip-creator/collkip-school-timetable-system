@@ -3,7 +3,10 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
-  base: './',
+  // Use an absolute root base for AppDeploy's managed frontend asset routing.
+  // Relative base paths can resolve under /api/ and cause the hosted app to request
+  // frontend assets from /api/assets instead of the managed frontend asset location.
+  base: '/',
   server: {
     host: '127.0.0.1',
     port: 1420,

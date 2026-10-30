@@ -5,15 +5,8 @@ const config: CapacitorConfig = {
   appName: 'Collkip Teacher',
   webDir: 'dist-mobile',
   bundledWebRuntime: false,
-
   android: {
     allowMixedContent: false,
-  },
-
-  plugins: {
-    CapacitorHttp: {
-      enabled: true,
-    },
   },
 };
 

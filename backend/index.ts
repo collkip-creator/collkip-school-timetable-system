@@ -311,7 +311,11 @@ async function revokeMobileDevice(body: Record<string, unknown>) {
 const admin = [requireAuth(), requireAdminEmailAllowlist(ADMIN_EMAILS)];
 
 export const handler = router({
-  'GET /api/_healthcheck': [async () => json({ message: 'Success' })],
+  // Public lightweight endpoints. Keep these dependency-free so the platform can
+  // register and verify the backend independently of database/auth state.
+  'GET /api/_healthcheck': [async () => json({ message: 'Success', service: 'collkip-api' })],
+  'GET /api/health': [async () => json({ message: 'Success', service: 'collkip-api', timestamp: new Date().toISOString() })],
+  'GET /api/ping': [async () => json({ ok: true, service: 'collkip-api', route: '/api/ping' })],
   'POST /api/licensing/activate': [async ({ body }) => activateLicense((body || {}) as Record<string, unknown>)],
   'POST /api/licensing/verify': [async ({ body }) => verifyLicense((body || {}) as Record<string, unknown>)],
   'POST /api/mobile/pairings': [async ({ body }) => createMobilePairing((body || {}) as Record<string, unknown>)],
