@@ -33,6 +33,9 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
+      - name: Synchronize npm lock file
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+
       - name: Install frontend dependencies
         run: npm ci
 
