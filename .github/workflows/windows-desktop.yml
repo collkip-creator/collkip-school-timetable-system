@@ -72,8 +72,6 @@ jobs:
           '@ | Set-Content node_modules/@appdeploy/client/index.js
 
       - name: Build Windows NSIS installer
-        env:
-          VITE_WINDOWS_DESKTOP: 'true'
         run: npm run desktop:build
 
       - name: Upload installer artifacts
