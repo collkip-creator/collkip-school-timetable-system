@@ -4,6 +4,10 @@ import { localStore, localStoreKeys } from './localStore';
 import { licensingApi } from './licensingClient';
 import SuperAdmin from './SuperAdmin';
 import { TeacherMobileSync } from './TeacherMobile';
+declare const __COLLKIP_WINDOWS_DESKTOP__: boolean;
+
+const isWindowsDesktopBuild = __COLLKIP_WINDOWS_DESKTOP__;
+
 import {
   Building2,
   CalendarClock,
@@ -408,16 +412,17 @@ function App() {
         <NavButton icon={<ShieldCheck size={17} />} label="Scheduling Readiness" active={section === 'readiness'} onClick={() => nav('readiness')} />
         <NavButton icon={<CalendarClock size={17} />} label="Generate Timetable" active={section === 'generator'} onClick={() => nav('generator')} />
         <NavButton icon={<Smartphone size={17} />} label="Teacher Mobile Sync" active={section === 'teacherSync'} onClick={() => nav('teacherSync')} />
-        <div className="my-4 border-t border-slate-800" />
-        <NavButton icon={<ShieldCheck size={17} />} label="Super Admin Portal" active={section === 'superadmin'} onClick={() => nav('superadmin')} />
-        <div className="mt-auto rounded-xl border border-slate-800 bg-slate-900 p-3 text-xs leading-5 text-slate-500"><div className="mb-1 flex items-center gap-2 text-slate-300"><Database size={14} /> Local-first foundation</div>Core records persist locally in this workspace and use stable IDs for future desktop/offline synchronization.</div>
+        {!isWindowsDesktopBuild && <>
+          <div className="my-4 border-t border-slate-800" />
+          <NavButton icon={<ShieldCheck size={17} />} label="Super Admin Portal" active={section === 'superadmin'} onClick={() => nav('superadmin')} />
+        </>}
       </div></aside>
       {mobileNav && <button className="fixed inset-0 z-40 bg-black/60 lg:hidden" onClick={() => setMobileNav(false)} aria-label="Close navigation" />}
       <main className="min-w-0 flex-1 p-4 lg:p-7">
         {notice && <div role="status" aria-live="polite" className={`mb-5 flex items-center gap-3 rounded-xl border px-4 py-3 text-sm ${notice.startsWith('LOCAL SAVE ERROR:') ? 'border-rose-500/30 bg-rose-500/10 text-rose-200' : 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200'}`}><CheckCircle2 size={17} />{notice}<button className="ml-auto" onClick={() => setNotice('')} aria-label="Dismiss notice"><X size={15} /></button></div>}
         {section === 'dashboard' && <Dashboard profile={profile} totals={totals} readiness={readiness} issues={issues} onNavigate={nav} onValidate={validate} />}
         {section === 'school' && <SchoolSetup profile={profile} onSave={saveProfile} license={license} deviceId={deviceId} firstRun={firstRun} onActivate={activateLicense} onVerify={checkLicense} onBackup={createBackup} onRestore={restoreBackup} onCompleteOnboarding={() => { setFirstRun(false); setNotice('School workspace setup complete.'); }} />}
-        {section === 'superadmin' && <SuperAdmin />}
+        {section === 'superadmin' && !isWindowsDesktopBuild && <SuperAdmin />}
         {section === 'teacherSync' && <TeacherMobileSync data={data} profile={profile} license={license} deviceId={deviceId} />}
         {section !== 'dashboard' && section !== 'school' && section !== 'constraints' && section !== 'parallel' && section !== 'readiness' && section !== 'generator' && section !== 'superadmin' && section !== 'teacherSync' && !['requirements','divisions','combined'].includes(section) && <DataManager section={section} items={filtered} total={current.length} query={query} setQuery={setQuery} onAdd={() => setModal({ type: 'record' })} onEdit={id => setModal({ type: 'record', id })} onDelete={deleteRecord} onDeactivate={deactivate} onReset={resetDataset} onImport={() => fileRef.current?.click()} onTemplate={() => templateFor(section)} onExport={exportDataset} onValidate={validate} extra={(section === 'teachers' ? 'teacherSubjects' : section === 'schedules' ? 'schedulePeriods' : undefined)} onExtra={id => setModal({ type: section === 'teachers' ? 'teacherSubjects' : 'schedulePeriods', id })} />}
         {section === 'requirements' && <RequirementsManager data={data} persist={persist} query={query} setQuery={setQuery} setNotice={setNotice} open={(id)=>setModal({type:'requirement',id})} openCombined={()=>setModal({type:'combined'})} exportData={()=>phase2Export('requirements')} />}

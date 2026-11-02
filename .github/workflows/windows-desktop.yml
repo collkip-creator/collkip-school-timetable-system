@@ -33,10 +33,47 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
+      - name: Synchronize npm lock file
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Provide AppDeploy client shim for standalone Windows build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force node_modules/@appdeploy/client | Out-Null
+          @'
+          {"name":"@appdeploy/client","version":"0.0.0-ci","type":"module"}
+          '@ | Set-Content node_modules/@appdeploy/client/package.json
+          @'
+          const API_BASE = 'https://api-v2.appdeploy.ai/app/collkip-school-timetable-system-6h732l';
+          const request = async (method, path, data) => {
+            const response = await fetch(`${API_BASE}${path}`, {
+              method,
+              headers: { 'Content-Type': 'application/json' },
+              body: data === undefined ? undefined : JSON.stringify(data),
+            });
+            const text = await response.text();
+            let parsed;
+            try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
+            if (!response.ok) throw new Error(parsed?.error || parsed?.message || `Request failed with status ${response.status}`);
+            return { data: parsed };
+          };
+          export const api = {
+            get: path => request('GET', path),
+            post: (path, data) => request('POST', path, data),
+          };
+          export const auth = {
+            async getUser() { return null; },
+            async signIn() { throw new Error('Super Admin sign-in is only available in the hosted AppDeploy portal.'); },
+            async signOut() {},
+          };
+          '@ | Set-Content node_modules/@appdeploy/client/index.js
+
       - name: Build Windows NSIS installer
+        env:
+          VITE_WINDOWS_DESKTOP: 'true'
         run: npm run desktop:build
 
       - name: Upload installer artifacts

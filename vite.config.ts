@@ -3,6 +3,9 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
+  define: {
+    __COLLKIP_WINDOWS_DESKTOP__: JSON.stringify(process.env.VITE_WINDOWS_DESKTOP === 'true'),
+  },
   // Use an absolute root base for AppDeploy's managed frontend asset routing.
   // Relative base paths can resolve under /api/ and cause the hosted app to request
   // frontend assets from /api/assets instead of the managed frontend asset location.
