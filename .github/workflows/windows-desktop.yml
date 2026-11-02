@@ -66,7 +66,7 @@ jobs:
           };
           export const auth = {
             async getUser() { return null; },
-            async signIn() { throw new Error('Administrator ligin is not available in desktop version of collkip'); },
+            async signIn() { throw new Error('Administrator login is not available in desktop version of collkip'); },
             async signOut() {},
           };
           '@ | Set-Content node_modules/@appdeploy/client/index.js
